@@ -20,6 +20,7 @@ import {
   type Timeline,
   type Millis,
 } from "./core/operations";
+import { scopeFor } from "./core/types";
 import { digestTimeline } from "./core/digest";
 import { probeMedia } from "./core/probe";
 import { renderTimeline } from "./core/render";
@@ -99,12 +100,12 @@ const timelineSchema = z.object({
 
 export const rpcContract = defineRpcContract({
   timeline_get: {
-    input: z.object({ threadId: z.string() }),
+    input: z.object({ scope: z.string() }),
     output: z.object({ timeline: timelineSchema }),
   },
   timeline_apply: {
     input: z.object({
-      threadId: z.string(),
+      scope: z.string(),
       operations: z.array(z.unknown()),
     }),
     output: z.object({
@@ -115,7 +116,7 @@ export const rpcContract = defineRpcContract({
   },
   timeline_render: {
     input: z.object({
-      threadId: z.string(),
+      scope: z.string(),
       outputPath: z.string().optional(),
     }),
     output: z.object({
@@ -125,7 +126,7 @@ export const rpcContract = defineRpcContract({
     }),
   },
   render_status: {
-    input: z.object({ threadId: z.string() }),
+    input: z.object({ scope: z.string() }),
     output: z.object({
       state: z.enum(["idle", "rendering", "done", "failed"]),
       outputPath: z.string().optional(),
@@ -230,12 +231,6 @@ export default async function plugin(bb: BbPluginApi) {
 
   const key = (scope: string) => `timeline:${scope}`;
 
-  // A thread's plan is scoped to the thread. A CLI call outside a thread has
-  // no thread id, so it falls back to the working directory: one edit per
-  // project folder, stable across invocations.
-  const scopeFor = (ctx: { threadId?: string; cwd?: string }): string =>
-    ctx.threadId ?? `cwd:${ctx.cwd ?? "default"}`;
-
   async function readTimeline(scope: string): Promise<Timeline> {
     const stored = await bb.storage.kv.get<Timeline>(key(scope));
     return stored ?? emptyTimeline();
@@ -327,28 +322,28 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    timeline_get: async ({ threadId }) => ({
-      timeline: wirePlan(await readTimeline(threadId)) as Timeline,
+    timeline_get: async ({ scope }) => ({
+      timeline: wirePlan(await readTimeline(scope)) as Timeline,
     }),
-    timeline_apply: async ({ threadId, operations }) => {
-      const result = await applyToScope(threadId, operations);
+    timeline_apply: async ({ scope, operations }) => {
+      const result = await applyToScope(scope, operations);
       return {
         timeline: wirePlan(result.timeline) as Timeline,
         digest: result.digest,
         applied: result.applied,
       };
     },
-    timeline_render: async ({ threadId, outputPath }) => {
-      const timeline = await readTimeline(threadId);
-      return startRender(threadId, timeline, outputPath);
+    timeline_render: async ({ scope, outputPath }) => {
+      const timeline = await readTimeline(scope);
+      return startRender(scope, timeline, outputPath);
     },
-    render_status: async ({ threadId }) => {
+    render_status: async ({ scope }) => {
       const row = db
         .prepare(
           `SELECT state, output_path, message FROM renders
            WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`,
         )
-        .get(threadId) as
+        .get(scope) as
         | { state: string; output_path: string; message: string }
         | undefined;
       if (row === undefined) {
@@ -429,22 +424,22 @@ export default async function plugin(bb: BbPluginApi) {
       {
         name: "timeline",
         summary: "Show or edit the timeline",
-        usage: "bb video timeline show|apply [--thread <id>] [--op <json>]",
+        usage: "bb video timeline show|apply [--thread <id>] [--scope <scope>] [--op <json>]",
       },
       {
         name: "render",
         summary: "Render the timeline",
-        usage: "bb video render [--thread <id>] [--out <path>]",
+        usage: "bb video render [--thread <id>] [--scope <scope>] [--out <path>]",
       },
       {
         name: "status",
         summary: "Show the last render's state",
-        usage: "bb video status [--thread <id>]",
+        usage: "bb video status [--thread <id>] [--scope <scope>]",
       },
     ],
     async run(argv, ctx) {
       const json = argv.includes("--json");
-      const flags = ["--thread", "--op", "--out"];
+      const flags = ["--thread", "--scope", "--op", "--out"];
       const flag = (name: string): string | undefined => {
         const index = argv.indexOf(name);
         return index === -1 ? undefined : argv[index + 1];
@@ -455,10 +450,13 @@ export default async function plugin(bb: BbPluginApi) {
         (arg, index) =>
           !arg.startsWith("--") && !flags.includes(argv[index - 1] ?? ""),
       );
-      // --thread names a thread's plan explicitly; otherwise the caller's
-      // thread, else the working directory, so repeated shell calls in one
-      // folder share one plan.
-      const scope = flag("--thread") ?? scopeFor(ctx);
+      // --thread names a thread's plan and --scope names any plan by its
+      // exact scope. Without either, a call made from inside bb uses the
+      // caller's thread, and a plain shell call uses the working directory,
+      // so repeated shell calls in one folder share one plan.
+      const scope = flag("--thread")
+        ? `thread:${flag("--thread")}`
+        : (flag("--scope") ?? scopeFor(ctx));
         const reply = (value: unknown, text: string) => ({
         exitCode: 0,
         stdout: json ? JSON.stringify(value) : text,
@@ -524,7 +522,7 @@ export default async function plugin(bb: BbPluginApi) {
       return {
         exitCode: 1,
         stderr:
-          "Usage:\n  bb video probe <path>\n  bb video timeline show|apply [--op <json>]\n  bb video render [--out <path>]\n  bb video status",
+          "Usage:\n  bb video probe <path>\n  bb video timeline show|apply [--thread <id>] [--scope <scope>] [--op <json>]\n  bb video render [--thread <id>] [--scope <scope>] [--out <path>]\n  bb video status [--thread <id>] [--scope <scope>]",
       };
     },
   });

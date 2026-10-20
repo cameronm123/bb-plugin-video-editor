@@ -5,6 +5,26 @@
 export type Millis = number; // integer milliseconds — never floats
 export type ClipId = string; // stable, generated
 
+/**
+ * The scope of a plan: the name every surface uses to agree on which plan it
+ * is looking at.
+ *
+ * A thread's plan belongs to that thread. A shell call outside a thread has
+ * no thread id, so it falls back to the working directory: one edit per
+ * project folder, stable across invocations. A plugin page has neither a
+ * thread nor a directory, so it uses the project.
+ */
+export function scopeFor(ctx: {
+  threadId?: string | null;
+  cwd?: string;
+  projectId?: string | null;
+}): string {
+  if (ctx.threadId != null && ctx.threadId !== "") return `thread:${ctx.threadId}`;
+  if (ctx.cwd != null && ctx.cwd !== "") return `cwd:${ctx.cwd}`;
+  if (ctx.projectId != null && ctx.projectId !== "") return `project:${ctx.projectId}`;
+  return "default";
+}
+
 export interface MediaRef {
   path: string; // absolute path on the host
   durationMs?: Millis; // filled by probe

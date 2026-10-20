@@ -10,7 +10,7 @@
     "name": "Video Editor",
     "description": "Edit video from a bb thread: the agent works on a timeline plan, the plugin renders it with ffmpeg.",
     "branding": {
-      "icon": "Clapperboard"
+      "icon": "Layers"
     },
     "server": "./server.ts",
     "app": "./app.tsx"

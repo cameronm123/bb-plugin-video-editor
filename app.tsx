@@ -53,7 +53,7 @@ function timecode(ms: number, fps: number): string {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}:${String(frames).padStart(2, "0")}`;
 }
 
-function useTimeline(threadId: string | null) {
+function useTimeline(scope: string | null) {
   const rpc = useRpc<typeof rpcContract>();
   const [plan, setPlan] = useState<Plan | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,14 +61,14 @@ function useTimeline(threadId: string | null) {
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
   const refetch = useCallback(() => {
-    if (threadId === null) return;
+    if (scope === null) return;
     rpc
-      .call("timeline_get", { threadId })
+      .call("timeline_get", { scope })
       .then((result) => {
         setPlan(result.timeline as unknown as Plan);
         setError(null);
       }, report);
-  }, [rpc, report, threadId]);
+  }, [rpc, report, scope]);
   useEffect(() => {
     refetch();
   }, [refetch]);
@@ -130,18 +130,23 @@ function TrackRow({
   );
 }
 
-function VideoEditorPage() {
-  const { threadId } = useBbContext();
-  const { rpc, plan, error, report, refetch } = useTimeline(threadId);
+/**
+ * The timeline panel. It shows one plan, identified by its scope.
+ *
+ * A bb plugin page is not inside a thread, so `useBbContext` gives no
+ * thread and no project there. The nav panel therefore shows the plugin's
+ * project-less plan, and a thread panel shows that thread's plan.
+ */
+function TimelinePanel({ scope, heading }: { scope: string; heading: string }) {
+  const { rpc, plan, error, report, refetch } = useTimeline(scope);
   const [renderState, setRenderState] = useState<string>("idle");
 
   useEffect(() => {
-    if (threadId === null) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
-        const status = await rpc.call("render_status", { threadId });
+        const status = await rpc.call("render_status", { scope });
         if (cancelled) return;
         setRenderState(status.state);
         // Keep polling only while a render is in flight, so the badge does
@@ -159,7 +164,7 @@ function VideoEditorPage() {
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [rpc, threadId, plan]);
+  }, [rpc, scope, plan]);
 
   const totalMs =
     plan?.tracks.reduce(
@@ -184,6 +189,7 @@ function VideoEditorPage() {
                 {plan.width}×{plan.height} @ {plan.fps}fps · {timecode(totalMs, plan.fps)}
               </span>
             </div>
+            <p className="mt-1 text-xs text-muted-foreground">{heading}</p>
             {error === null ? null : (
               <p role="alert" className="mt-3 text-sm text-destructive">
                 {error}
@@ -235,11 +241,9 @@ function VideoEditorPage() {
             ) : null}
             <div className="mt-5 flex items-center gap-2">
               <Button
-                disabled={threadId === null}
                 onClick={() => {
-                  if (threadId === null) return;
                   rpc
-                    .call("timeline_render", { threadId })
+                    .call("timeline_render", { scope })
                     .then(refetch, report);
                 }}
               >
@@ -276,10 +280,33 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "video-editor",
     title: "Video editor",
-    icon: "Clapperboard",
+    icon: "Layers",
     // Routed at /plugins/video-editor/video-editor; the component receives the
     // remainder as `subPath` for deep links within the page.
     path: "video-editor",
-    component: VideoEditorPage,
+    // A plugin page is not inside a thread or a project, so this shows the
+    // plugin's own plan. A thread's plan is in the thread panel below.
+    component: () => (
+      <TimelinePanel
+        scope="default"
+        heading="The plugin's own plan. A thread's plan is in that thread's Video editor tab."
+      />
+    ),
+  });
+
+  // The thread's own plan, beside the conversation the agent is editing it
+  // in. This is where the agent and the person look at the same timeline.
+  app.slots.threadPanelAction({
+    id: "video-editor",
+    title: "Video editor",
+    component: ({ threadId }: { threadId: string }) => (
+      <TimelinePanel
+        scope={`thread:${threadId}`}
+        heading="This thread's plan."
+      />
+    ),
+    run: async ({ openPanel }) => {
+      openPanel({ title: "Video editor" });
+    },
   });
 });

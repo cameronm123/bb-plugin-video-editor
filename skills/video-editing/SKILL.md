@@ -151,8 +151,20 @@ bb video status
 bb video probe /path/to/file.mp4
 ```
 
-`bb video timeline` and `bb video render` act on the current thread. Pass
-`--thread <id>` to target another one.
-
 With `--json`, every command returns the same envelope:
 `{"timeline": {...}, "digest": "..."}` for the timeline commands.
+
+## Which plan
+
+A plan belongs to a **scope**, and every surface names a scope the same way:
+
+| Scope | Used by |
+| --- | --- |
+| `thread:<id>` | The agent tool in a thread, and the thread's Video editor tab |
+| `cwd:<dir>` | A shell call with no thread, scoped to the working directory |
+| `project:<id>` | A plugin page in a project |
+| `default` | The plugin's own plan, shown in the Video editor page |
+
+`bb video` from inside bb uses the calling thread's plan. From a plain shell it
+uses the working directory's plan. Pass `--thread <id>` for a specific
+thread's plan, or `--scope <scope>` for any plan by its exact name.

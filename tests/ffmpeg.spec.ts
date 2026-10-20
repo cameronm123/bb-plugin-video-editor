@@ -174,7 +174,15 @@ test("per-clip effects compile to their filter chains", () => {
   const { filterGraph } = compileFfmpeg(tl, { outputPath: "/out.mp4" });
   assert.ok(filterGraph.includes("setpts=PTS/2"), filterGraph);
   assert.ok(filterGraph.includes("crop=w=iw*0.8:h=ih*0.8:x=iw*0.1:y=ih*0.1"), filterGraph);
-  assert.ok(filterGraph.includes("colorchannelmixer=aa=0.75"), filterGraph);
+  // On the base track opacity scales the colour channels: the clip is
+  // composited over black, and an alpha channel would be dropped by the
+  // yuv420p conversion.
+  assert.ok(
+    filterGraph.includes(
+      "colorchannelmixer=rr=0.75:rg=0:rb=0:gr=0:gg=0.75:gb=0:br=0:bg=0:bb=0.75",
+    ),
+    filterGraph,
+  );
   assert.ok(filterGraph.includes("fade=t=in:st=0:d=0.5"), filterGraph);
   assert.ok(filterGraph.includes("fade=t=out:st=1:d=1"), filterGraph);
 });

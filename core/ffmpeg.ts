@@ -144,12 +144,26 @@ function baseClipChain(
     `scale=${timeline.width}:${timeline.height}:force_original_aspect_ratio=decrease`,
     `pad=${timeline.width}:${timeline.height}:(ow-iw)/2:(oh-ih)/2`,
   );
+  // The scale effect shrinks the picture inside the canvas. It runs after the
+  // fit-and-pad, so the canvas is not scaled back up, and a second pad
+  // centres the smaller picture.
+  const scale = effectOf(clip, "scale");
+  if (scale !== undefined && scale.amount !== undefined && scale.amount !== 1) {
+    const amt = Math.min(Math.max(scale.amount, 0), 2);
+    parts.push(
+      `scale=w=${amt}*iw:h=${amt}*ih`,
+      `pad=${timeline.width}:${timeline.height}:(ow-iw)/2:(oh-ih)/2`,
+    );
+  }
   const opacity = effectOf(clip, "opacity");
   if (opacity !== undefined && opacity.amount !== undefined) {
+    // Opacity on the base track darkens the picture, because the base track
+    // is composited over black. Scaling each colour channel by the opacity
+    // is that blend; an alpha channel would be discarded by the yuv420p
+    // conversion that follows.
+    const amt = Math.min(Math.max(opacity.amount, 0), 1);
     parts.push(
-      "format=yuva420p",
-      `colorchannelmixer=aa=${Math.min(Math.max(opacity.amount, 0), 1)}`,
-      "format=yuv420p",
+      `colorchannelmixer=rr=${amt}:rg=0:rb=0:gr=0:gg=${amt}:gb=0:br=0:bg=0:bb=${amt}`,
     );
   }
   parts.push(...fadeFilters(clip, false));

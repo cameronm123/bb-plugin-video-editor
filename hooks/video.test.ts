@@ -1,22 +1,37 @@
-// Tests `claude plugin test` runs. The kit's `$` is the engine's own mods
-// API and the mod's hooks are live, so these fire real events end to end:
-// the tool.call hook answers the registered tool, the command.run hook
-// answers /video, and the store is the mocked one the kit provides.
-import { expect, test } from "claude-code/testing";
+// Tests `claude plugin test` runs. The kit's `$` fires events the way Claude
+// Code would (each method fires the event of the same name); `on` registers
+// stubs that answer in Claude Code's place. The mod's hooks are live, so
+// these run the real register.ts against the real core.
+import {
+  expect,
+  mock,
+  test,
+  type SessionKit,
+  type StubFn,
+} from "claude-code/testing";
 
-// Same key register.ts persists the timeline plan under.
-const STORE_KEY = "video-editor.timeline";
 const TOOL = "mcp__video-editor__video_edit";
 
-test("/video shows the digest of a fresh timeline", async ($) => {
-  await $.store.delete(STORE_KEY);
+// session.start registers the /video command and the video_edit tool; firing
+// it needs stubs for the two $.register calls the hook makes. Every stub is
+// registered before the test's first call on `$`, as the kit requires.
+async function startSession($: SessionKit, on: StubFn): Promise<void> {
+  mock.store(on);
+  on("command.register", () => ({ value: undefined }));
+  on("tool.register", () => ({ value: undefined }));
+  on("session.start", () => ({ cwd: "/work" }));
+  await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
+}
+
+test("/video shows the digest of a fresh timeline", async ($, on) => {
+  await startSession($, on);
 
   const answer = await $.command.run({ command: "video", args: "" });
   expect(answer.text).toContain('timeline "untitled" 1920x1080 @30fps 0ms');
 });
 
-test("video_edit applies operations and returns the digest", async ($) => {
-  await $.store.delete(STORE_KEY);
+test("video_edit applies operations and returns the digest", async ($, on) => {
+  await startSession($, on);
 
   const applied = await $.tool.call({
     tool: TOOL,
@@ -41,8 +56,8 @@ test("video_edit applies operations and returns the digest", async ($) => {
   expect(answer.text).toContain("clip-1 @0+2000ms");
 });
 
-test("video_edit answers an invalid operation with an error and keeps the timeline", async ($) => {
-  await $.store.delete(STORE_KEY);
+test("video_edit answers an invalid operation with an error and keeps the timeline", async ($, on) => {
+  await startSession($, on);
 
   const applied = await $.tool.call({
     tool: TOOL,

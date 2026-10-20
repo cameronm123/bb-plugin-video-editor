@@ -15,12 +15,14 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "claude-code/testing": [
+        "./hooks/claude-code-testing.ts"
       ]
     },
     "noEmit": true,
     "allowImportingTsExtensions": true,
-    "skipLibCheck": false,
-    "allowImportingTsExtensions": true
+    "skipLibCheck": false
   },
   "include": [
     "server.ts",
@@ -28,6 +30,7 @@
     "components",
     "lib",
     "core",
-    "hooks"
+    "hooks",
+    "tests"
   ]
 }

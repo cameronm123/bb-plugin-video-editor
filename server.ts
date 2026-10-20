@@ -140,16 +140,35 @@ export const rpcContract = defineRpcContract({
 /** Realtime channel app.tsx listens on. */
 const TIMELINE_CHANGED = "timeline-changed";
 
+// The plan carries optional fields as explicit `undefined`, which the RPC wire
+// format rejects. Drop them at the boundary rather than making every optional
+// field in the core carry a null.
+function wirePlan(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(wirePlan);
+  if (typeof value !== "object" || value === null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (v !== undefined) out[k] = wirePlan(v);
+  }
+  return out;
+}
+
+// The default plan's track ids are fixed, not random: an agent reads the
+// timeline, then addresses a track by id in a later call. Random ids would
+// change on every read and make that impossible.
+const DEFAULT_VIDEO_TRACK = "video-1";
+const DEFAULT_AUDIO_TRACK = "audio-1";
+
 function emptyTimeline(): Timeline {
   return {
-    id: randomUUID(),
+    id: "default",
     name: "Untitled",
     width: 1920,
     height: 1080,
     fps: 30,
     tracks: [
-      { id: randomUUID(), kind: "video", clips: [] },
-      { id: randomUUID(), kind: "audio", clips: [] },
+      { id: DEFAULT_VIDEO_TRACK, kind: "video", clips: [] },
+      { id: DEFAULT_AUDIO_TRACK, kind: "audio", clips: [] },
     ],
     markers: [],
     captions: [],
@@ -190,27 +209,33 @@ export default async function plugin(bb: BbPluginApi) {
      )`,
   ]);
 
-  const key = (threadId: string) => `timeline:${threadId}`;
+  const key = (scope: string) => `timeline:${scope}`;
 
-  async function readTimeline(threadId: string): Promise<Timeline> {
-    const stored = await bb.storage.kv.get<Timeline>(key(threadId));
+  // A thread's plan is scoped to the thread. A CLI call outside a thread has
+  // no thread id, so it falls back to the working directory: one edit per
+  // project folder, stable across invocations.
+  const scopeFor = (ctx: { threadId?: string; cwd?: string }): string =>
+    ctx.threadId ?? `cwd:${ctx.cwd ?? "default"}`;
+
+  async function readTimeline(scope: string): Promise<Timeline> {
+    const stored = await bb.storage.kv.get<Timeline>(key(scope));
     return stored ?? emptyTimeline();
   }
-  async function writeTimeline(threadId: string, timeline: Timeline): Promise<void> {
-    await bb.storage.kv.set(key(threadId), timeline);
-    bb.realtime.publish(TIMELINE_CHANGED, { threadId });
+  async function writeTimeline(scope: string, timeline: Timeline): Promise<void> {
+    await bb.storage.kv.set(key(scope), timeline);
+    bb.realtime.publish(TIMELINE_CHANGED, { scope });
   }
 
-  async function applyToThread(
-    threadId: string,
+  async function applyToScope(
+    scope: string,
     operations: unknown[],
   ): Promise<{ timeline: Timeline; digest: string; applied: number }> {
-    let timeline = await readTimeline(threadId);
+    let timeline = await readTimeline(scope);
     for (const raw of operations) {
       const operation = validateOperation(raw);
       timeline = applyOperation(timeline, operation);
     }
-    await writeTimeline(threadId, timeline);
+    await writeTimeline(scope, timeline);
     return {
       timeline,
       digest: digestTimeline(timeline),
@@ -219,9 +244,17 @@ export default async function plugin(bb: BbPluginApi) {
   }
 
   bb.rpc.register(rpcContract, {
-    timeline_get: async ({ threadId }) => ({ timeline: await readTimeline(threadId) }),
-    timeline_apply: async ({ threadId, operations }) =>
-      applyToThread(threadId, operations),
+    timeline_get: async ({ threadId }) => ({
+      timeline: wirePlan(await readTimeline(threadId)) as Timeline,
+    }),
+    timeline_apply: async ({ threadId, operations }) => {
+      const result = await applyToScope(threadId, operations);
+      return {
+        timeline: wirePlan(result.timeline) as Timeline,
+        digest: result.digest,
+        applied: result.applied,
+      };
+    },
     timeline_render: async ({ threadId, outputPath }) => {
       const timeline = await readTimeline(threadId);
       const hasClips = timeline.tracks.some((track) => track.clips.length > 0);
@@ -291,7 +324,7 @@ export default async function plugin(bb: BbPluginApi) {
   bb.agents.registerTool({
     name: "video_edit",
     description:
-      "Edit this thread's video timeline. Pass a list of operations; each is applied in order to the timeline plan and the new plan is returned as a digest. Read the timeline first with the video_edit action 'show' to learn the clip ids.",
+      "Edit this thread's video timeline. Call action 'show' first to read the timeline and learn the track and clip ids. Call action 'apply' with a list of operations to change it; each operation is an object with a `type` field. Call action 'render' to compile the timeline into an ffmpeg render.",
     presentation: {
       label: {
         pending: "Editing timeline",
@@ -308,7 +341,7 @@ export default async function plugin(bb: BbPluginApi) {
         .array(z.unknown())
         .optional()
         .describe(
-          "Operations to apply, in order. Kinds: add_clip, trim_clip, move_clip, remove_clip, set_effect, split_clip, add_marker, remove_marker, add_caption, remove_caption, set_property, add_track, remove_track, mute_track.",
+          "Operations to apply, in order. Each has a `type` field: add_clip, trim_clip, move_clip, remove_clip, set_effect, split_clip, add_marker, remove_marker, add_caption, remove_caption, set_property, add_track, remove_track, mute_track.",
         ),
       outputPath: z
         .string()
@@ -317,15 +350,15 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     async execute(params, ctx) {
       if (params.action === "show") {
-        const timeline = await readTimeline(ctx.threadId);
+        const timeline = await readTimeline(scopeFor(ctx));
         return digestTimeline(timeline);
       }
       if (params.action === "apply") {
         const operations = params.operations ?? [];
-        const result = await applyToThread(ctx.threadId, operations);
+        const result = await applyToScope(scopeFor(ctx), operations);
         return `${result.applied} operation(s) applied.\n\n${result.digest}`;
       }
-      const timeline = await readTimeline(ctx.threadId);
+      const timeline = await readTimeline(scopeFor(ctx));
       const target =
         params.outputPath ??
         `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
@@ -356,26 +389,29 @@ export default async function plugin(bb: BbPluginApi) {
     ],
     async run(argv, ctx) {
       const json = argv.includes("--json");
-      const threadId = ctx.threadId ?? "default";
+      const flags = ["--thread", "--op", "--out"];
       const flag = (name: string): string | undefined => {
         const index = argv.indexOf(name);
         return index === -1 ? undefined : argv[index + 1];
       };
+      // A flag's value is the argument after it, so it must not also count as
+      // a positional.
       const positionals = argv.filter(
         (arg, index) =>
-          !arg.startsWith("--") &&
-          argv[index - 1] !== "--thread" &&
-          argv[index - 1] !== "--op" &&
-          argv[index - 1] !== "--out",
+          !arg.startsWith("--") && !flags.includes(argv[index - 1] ?? ""),
       );
-      const reply = (value: unknown, text: string) => ({
+      // --thread names a thread's plan explicitly; otherwise the caller's
+      // thread, else the working directory, so repeated shell calls in one
+      // folder share one plan.
+      const scope = flag("--thread") ?? scopeFor(ctx);
+        const reply = (value: unknown, text: string) => ({
         exitCode: 0,
         stdout: json ? JSON.stringify(value) : text,
       });
 
       const [command, sub] = positionals;
       if (command === "probe") {
-        const path = positionals[2];
+        const path = sub;
         if (path === undefined) {
           return { exitCode: 1, stderr: "Usage: bb video probe <path>" };
         }
@@ -391,15 +427,15 @@ export default async function plugin(bb: BbPluginApi) {
           }
           const parsed: unknown = JSON.parse(raw);
           const operations = Array.isArray(parsed) ? parsed : [parsed];
-          const result = await applyToThread(threadId, operations);
+          const result = await applyToScope(scope, operations);
           return reply(result, result.digest);
         }
-        const timeline = await readTimeline(threadId);
+        const timeline = await readTimeline(scope);
         return reply(timeline, digestTimeline(timeline));
       }
 
       if (command === "render") {
-        const timeline = await readTimeline(threadId);
+        const timeline = await readTimeline(scope);
         const target =
           flag("--out") ??
           `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;

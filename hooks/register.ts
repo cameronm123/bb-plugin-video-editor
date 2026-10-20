@@ -71,7 +71,13 @@ export function register(on: OnEvent) {
       await $.store.set(STORE_KEY, updated);
       let digest = digestTimeline(updated);
       if (typeof e.render === "string" && e.render !== "") {
-        digest += "\n" + (await render($, updated, e.render));
+        // The operations already applied and persisted, so a render failure
+        // reports beside the digest instead of masking it as an error.
+        try {
+          digest += "\n" + (await render($, updated, e.render));
+        } catch (error) {
+          digest += "\nrender FAILED: " + errorMessage(error);
+        }
       }
       return { result: digest };
     } catch (error) {

@@ -6,9 +6,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
-import { probeMedia } from "./probe.ts";
-import { renderTimeline } from "./render.ts";
-import type { Timeline } from "./types.ts";
+import { probeMedia } from "../core/probe.ts";
+import { renderTimeline } from "../core/render.ts";
+import type { Timeline } from "../core/types.ts";
 
 const execFileAsync = promisify(execFile);
 

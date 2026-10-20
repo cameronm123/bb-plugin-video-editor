@@ -46,12 +46,12 @@ milliseconds.
 
 ## Operations
 
-Each operation is an object with an `op` field. Pass them as a list to
+Each operation is an object with a `type` field. Pass them as a list to
 `action: "apply"`.
 
-| `op` | Fields | What it does |
+| `type` | Fields | What it does |
 | --- | --- | --- |
-| `add_clip` | `trackId`, `mediaPath`, `startMs`, `durationMs`, `inMs?`, `outMs?`, `label?` | Put a clip on a track |
+| `add_clip` | `trackId`, `media: { path }`, `startMs`, `durationMs`, `inMs`, `outMs`, `label?` | Put a clip on a track |
 | `trim_clip` | `clipId`, `startMs?`, `durationMs?`, `inMs?`, `outMs?` | Change a clip's timing |
 | `move_clip` | `clipId`, `startMs`, `trackId?` | Move a clip in time, or to another track |
 | `remove_clip` | `clipId` | Delete a clip |
@@ -105,7 +105,7 @@ The same edits are available without the tool:
 
 ```
 bb video timeline show
-bb video timeline apply --op '{"op":"add_marker","atMs":2000,"name":"hook"}'
+bb video timeline apply --op '{"type":"add_marker","atMs":2000,"name":"hook"}'
 bb video render --out /tmp/out.mp4
 bb video probe /path/to/file.mp4
 ```

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyOperation, validateOperation } from "./operations.ts";
-import type { Timeline } from "./types.ts";
+import { applyOperation, validateOperation } from "../core/operations.ts";
+import type { Timeline } from "../core/types.ts";
 
 function baseTimeline(): Timeline {
   return {

@@ -34,8 +34,10 @@ milliseconds.
 - A `bb video` **CLI command** for the same three things from a terminal.
 - A skill (`skills/video-editing`) that teaches an agent the operation set.
 
-The plan lives in the plugin's own storage, one per thread, so each thread
-carries its own edit.
+The plan lives in the plugin's own storage, scoped to the thread. A shell call
+outside a thread is scoped to the working directory instead, so repeated
+`bb video` calls in one folder share one plan. Pass `--thread <id>` to target
+a thread's plan from a shell.
 
 ## What you get in Claude Code
 
@@ -58,14 +60,21 @@ running.
 | File | What it does |
 | --- | --- |
 | `core/types.ts` | The data shape: `Timeline`, `Track`, `Clip`, `Effect`, `Marker`, `Caption` |
-| `core/operations.ts` | The operation union, zod validation, and the pure reducer |
+| `core/operations.ts` | The operation union, validation, and the pure reducer |
 | `core/digest.ts` | The compact text digest an agent reads |
 | `core/ffmpeg.ts` | Compiles a timeline to an ffmpeg argument list and filter graph |
-| `core/probe.ts` | Parses ffprobe output into a `MediaRef` |
-| `core/render.ts` | Runs ffmpeg and reports progress |
+| `core/probe-parse.ts` | Parses ffprobe output into a `MediaRef` |
+| `core/probe.ts` | Runs ffprobe (bb only) |
+| `core/render.ts` | Runs ffmpeg and reports progress (bb only) |
 
 The reducer is pure. Rendering is a separate step that reads the finished plan.
-Nothing in `core/` spawns a process except `core/render.ts`.
+Nothing in `core/` spawns a process except `core/render.ts` and `core/probe.ts`.
+
+The files the Claude Code mod reaches (`types`, `operations`, `digest`,
+`ffmpeg`, `probe-parse`) import nothing but each other. The mod's sandbox
+refuses a bare import, not even `node:fs`, so those files stay free of them.
+`core/render.ts` and `core/probe.ts` are the bb-only runners; the mod calls
+ffmpeg itself with `$.process.run`.
 
 ## Operations
 
@@ -109,9 +118,16 @@ bb plugin config video-editor set renderRoot /Volumes/ql-content/02_JOBS
 ## Test
 
 ```
-node --test core/
-npx tsc --noEmit -p tsconfig.json
+npm test            # node --test over tests/*.spec.ts
+npm run test:mod    # claude plugin test over the mod
+npm run typecheck   # both tsconfigs
 ```
+
+The two suites live apart on purpose. `tests/*.spec.ts` runs under `node --test`
+and covers the core, including a real ffmpeg render. `hooks/*.test.ts` runs
+under `claude plugin test` and drives the mod's hooks end to end. The Claude
+kit refuses a `node:test` import, and `node --test` does not know the kit, so
+the file naming keeps them from meeting.
 
 The end-to-end render test skips itself when ffmpeg is absent.
 

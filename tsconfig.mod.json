@@ -9,6 +9,11 @@
       "DOM"
     ],
     "types": [],
+    "paths": {
+      "claude-code/testing": [
+        "./hooks/claude-code-testing.ts"
+      ]
+    },
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "skipLibCheck": true
@@ -17,7 +22,10 @@
     "hooks/register.ts",
     "hooks/video.ts",
     "hooks/video.test.ts",
-    "hooks/claude-code.d.ts",
-    "core"
+    "hooks/claude-code-testing.ts",
+    "core/types.ts",
+    "core/operations.ts",
+    "core/digest.ts",
+    "core/ffmpeg.ts"
   ]
 }

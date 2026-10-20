@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildAssSubtitles, compileFfmpeg } from "./ffmpeg.ts";
-import type { Clip, Timeline } from "./types.ts";
+import { buildAssSubtitles, compileFfmpeg } from "../core/ffmpeg.ts";
+import type { Clip, Timeline } from "../core/types.ts";
 
 function clip(id: string, startMs: number, opts: Partial<Clip> = {}): Clip {
   return {

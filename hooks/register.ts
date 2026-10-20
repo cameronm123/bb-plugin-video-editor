@@ -102,14 +102,15 @@ async function render(
   outputPath: string,
 ): Promise<string> {
   // Captions burn in from an .ass file the caller writes. $.fs has no
-  // delete, so the temp file is overwritten each render, never removed.
-  // shortcut: the file lingers in TMPDIR until the OS cleans it.
+  // delete, so the file is never removed; the name carries a timestamp so
+  // two concurrent renders cannot clobber each other's subtitle file.
+  // shortcut: the files linger in TMPDIR until the OS cleans them.
   const tmpDir = await $.env.get("TMPDIR");
+  const stem = `video-editor-captions-${Date.now()}.ass`;
   const captionFile =
     tmpDir !== undefined && tmpDir !== ""
-      ? tmpDir + (tmpDir.endsWith("/") ? "" : "/") +
-        "video-editor-captions.ass"
-      : "video-editor-captions.ass";
+      ? tmpDir + (tmpDir.endsWith("/") ? "" : "/") + stem
+      : stem;
   const { args, captionContent } = compileFfmpeg(timeline, {
     outputPath,
     captionFile,

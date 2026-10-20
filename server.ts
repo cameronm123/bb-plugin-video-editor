@@ -267,23 +267,26 @@ export default async function plugin(bb: BbPluginApi) {
       const target =
         outputPath ??
         `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
+      const renderId = randomUUID();
       db.prepare(
         `INSERT INTO renders (id, thread_id, output_path, state, message, created_at)
          VALUES (?, ?, ?, 'rendering', '', ?)`,
-      ).run(randomUUID(), threadId, target, new Date().toISOString());
+      ).run(renderId, threadId, target, new Date().toISOString());
       bb.realtime.publish(TIMELINE_CHANGED, { threadId });
       // Fire and forget: the render outlives this call, so the agent is not
-      // blocked on ffmpeg. Poll render_status for the outcome.
+      // blocked on ffmpeg. Poll render_status for the outcome. The update
+      // names the render's own id: two renders to the same path must not
+      // overwrite each other's row.
       void renderTimeline(timeline, target, { ffmpegPath })
         .then((result) => {
           db.prepare(
-            `UPDATE renders SET state = 'done', message = ? WHERE output_path = ?`,
-          ).run(`Rendered in ${result.durationMs}ms`, target);
+            `UPDATE renders SET state = 'done', message = ? WHERE id = ?`,
+          ).run(`Rendered in ${result.durationMs}ms`, renderId);
         })
         .catch((cause: unknown) => {
           db.prepare(
-            `UPDATE renders SET state = 'failed', message = ? WHERE output_path = ?`,
-          ).run(cause instanceof Error ? cause.message : String(cause), target);
+            `UPDATE renders SET state = 'failed', message = ? WHERE id = ?`,
+          ).run(cause instanceof Error ? cause.message : String(cause), renderId);
         })
         .finally(() => {
           bb.realtime.publish(TIMELINE_CHANGED, { threadId });
@@ -294,7 +297,7 @@ export default async function plugin(bb: BbPluginApi) {
       const row = db
         .prepare(
           `SELECT state, output_path, message FROM renders
-           WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1`,
+           WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`,
         )
         .get(threadId) as
         | { state: string; output_path: string; message: string }

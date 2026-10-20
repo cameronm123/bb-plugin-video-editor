@@ -256,13 +256,17 @@ test("caption times shift with base-track transitions", () => {
   assert.ok(ass.includes("Dialogue: 0,0:00:02.00,0:00:03.50"), ass);
 });
 
-test("audio-only timelines map no video stream", () => {
+test("audio-only timelines still render a video track", () => {
   const tl = timeline([
     { id: "a1", kind: "audio", clips: [clip("s1", 0, { media: { path: "/s1.wav" } })] },
   ]);
-  const { args } = compileFfmpeg(tl, { outputPath: "/out.mp4" });
-  assert.ok(!args.includes("libx264"));
+  const { args, filterGraph } = compileFfmpeg(tl, { outputPath: "/out.mp4" });
+  // A video editor's output is a video. With no video track the render lays
+  // the audio over a black canvas of the plan's duration.
+  assert.ok(args.includes("libx264"));
   assert.ok(args.includes("-c:a"));
+  assert.ok(args.some((a) => a.includes("color=c=black")));
+  assert.ok(filterGraph.includes("[base]"));
 });
 
 test("an empty timeline is rejected", () => {

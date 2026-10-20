@@ -356,23 +356,25 @@ export function compileFfmpeg(
     });
   }
 
+  // A timeline with no video track still has to produce a video: render a
+  // black canvas for the plan's full duration and lay the audio over it.
+  if (videoLabel === undefined) {
+    const total = Math.max(timelineDurationMs(timeline), 1);
+    const index = inputIndex;
+    inputIndex += 1;
+    inputPlan.args.push(
+      "-f",
+      "lavfi",
+      "-i",
+      `color=c=black:s=${timeline.width}x${timeline.height}:r=${timeline.fps}:d=${sec(total)}`,
+    );
+    graph.push(`[${index}:v]format=yuv420p[base]`);
+    videoLabel = "base";
+  }
+
   // Overlay clips stacked on top, in track order (higher track = on top).
   for (const track of overlayTracks) {
     if (track.clips.length === 0) continue;
-    if (videoLabel === undefined) {
-      // No base clips: composite onto a black canvas for the full duration.
-      const total = timelineDurationMs(timeline);
-      const index = inputIndex;
-      inputIndex += 1;
-      inputPlan.args.push(
-        "-f",
-        "lavfi",
-        "-i",
-        `color=c=black:s=${timeline.width}x${timeline.height}:r=${timeline.fps}:d=${sec(total)}`,
-      );
-      graph.push(`[${index}:v]format=yuv420p[base]`);
-      videoLabel = "base";
-    }
     for (const clip of track.clips) {
       const label = `ov${graph.length}`;
       const startMs = shift(clip.startMs);

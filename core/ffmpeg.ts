@@ -112,7 +112,11 @@ function cropFilter(clip: Clip): string | undefined {
   const to = Math.min(Math.max(effect.to ?? 1, from), 1);
   if (to - from <= 0) return undefined;
   // Crop keeps the box from fraction `from` to fraction `to` on both axes.
-  return `crop=w=iw*${to - from}:h=ih*${to - from}:x=iw*${from}:y=ih*${from}`;
+  // The fraction is rounded to a whole number of pixels, so the filter text
+  // does not carry a float artefact like 0.6000000000000001.
+  const width = Math.round((to - from) * 1000) / 1000;
+  const offset = Math.round(from * 1000) / 1000;
+  return `crop=w=iw*${width}:h=ih*${width}:x=iw*${offset}:y=ih*${offset}`;
 }
 
 function fadeFilters(clip: Clip, alpha: boolean): string[] {
@@ -164,6 +168,21 @@ function baseClipChain(
     const amt = Math.min(Math.max(opacity.amount, 0), 1);
     parts.push(
       `colorchannelmixer=rr=${amt}:rg=0:rb=0:gr=0:gg=${amt}:gb=0:br=0:bg=0:bb=${amt}`,
+    );
+  }
+  // Position shifts the picture inside the canvas. The clip already fills the
+  // canvas, so it is padded out to twice the canvas size with the picture
+  // offset inside that, and the result is cropped back to the canvas from
+  // its centre. An offset of 1 moves the picture half a frame.
+  const position = effectOf(clip, "position");
+  if (position !== undefined && (position.x !== undefined || position.y !== undefined)) {
+    const px = Math.min(Math.max(position.x ?? 0, -1), 1);
+    const py = Math.min(Math.max(position.y ?? 0, -1), 1);
+    const padX = Math.round((timeline.width / 2 + (px * timeline.width) / 2) * 100) / 100;
+    const padY = Math.round((timeline.height / 2 + (py * timeline.height) / 2) * 100) / 100;
+    parts.push(
+      `pad=${timeline.width * 2}:${timeline.height * 2}:${padX}:${padY}:color=black`,
+      `crop=${timeline.width}:${timeline.height}`,
     );
   }
   parts.push(...fadeFilters(clip, false));

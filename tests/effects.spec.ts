@@ -110,3 +110,47 @@ test("effects change the rendered picture, not just the filter text", async (t) 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("position shifts the picture inside the frame", async (t) => {
+  if (!(await hasFfmpeg())) {
+    t.skip("ffmpeg is not installed");
+    return;
+  }
+  const dir = await mkdtemp(join(tmpdir(), "ve-position-"));
+  const source = join(dir, "red.mp4");
+  try {
+    await execFileAsync("ffmpeg", [
+      "-v", "error",
+      "-f", "lavfi", "-i", "color=c=red:s=320x240:d=2:r=30",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-y", source,
+    ]);
+
+    // The first red column of a frame, at the vertical middle.
+    const firstRedColumn = async (effects: Effect[]): Promise<number> => {
+      const out = join(dir, "pos.mp4");
+      const { args } = compileFfmpeg(planWith(effects, source), {
+        outputPath: out,
+      });
+      await execFileAsync("ffmpeg", args);
+      const { stdout } = await execFileAsync("ffmpeg", [
+        "-v", "error", "-ss", "1", "-i", out, "-frames:v", "1",
+        "-vf", "format=rgb24", "-f", "rawvideo", "-",
+      ], { encoding: "buffer", maxBuffer: 1 << 28 });
+      const width = 320;
+      for (let x = 0; x < width; x += 1) {
+        const i = (120 * width + x) * 3;
+        if (stdout[i] > 150) return x;
+      }
+      return -1;
+    };
+
+    const centred = await firstRedColumn([]);
+    assert.equal(centred, 0, "an unpositioned picture starts at the left edge");
+
+    // x moves the picture by x * width/2 pixels.
+    const shifted = await firstRedColumn([{ type: "position", x: 0.5, y: 0 }]);
+    assert.equal(shifted, 80, `x 0.5 should shift by 80px, got ${shifted}`);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

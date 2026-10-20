@@ -70,13 +70,21 @@ Each operation is an object with a `type` field. Pass them as a list to
 
 `set_effect` takes one of these `type` values:
 
-- `opacity` — `amount` 0 to 1
-- `scale` — `amount`, 1 is native size
-- `position` — `x` and `y`, each -1 to 1 of the frame
-- `crop` — `from` and `to`, each 0 to 1 of the frame
+- `opacity` — `amount` 0 to 1. The clip fades toward black.
+- `scale` — `amount`. 1 is native size, 0.5 is half size, 2 is double. The
+  smaller picture sits centred in the frame.
+- `position` — `x` and `y`, each -1 to 1. 0 is centred, 1 moves the picture
+  half a frame right (or down), -1 half a frame left (or up).
+- `crop` — `from` and `to`, each 0 to 1. Keeps the part of the source
+  between those fractions, on both axes.
 - `volume` — `amount` 0 to 1 (audio)
-- `fadeIn` / `fadeOut` — `amount` in seconds
-- `speed` — `from` is the new rate, 1 is native (2 is double speed)
+- `fadeIn` / `fadeOut` — `amount` as a fraction of the clip's length
+- `speed` — `to` is the new rate, 1 is native (2 is double speed)
+
+`scale` and `position` move the picture *inside* the frame. On the base
+track, `position` shifts the picture and leaves black where it moved away
+from, so a picture pushed off the edge is partly out of frame. To place a
+picture over another one, put it on a second video track.
 
 ## Workflow
 

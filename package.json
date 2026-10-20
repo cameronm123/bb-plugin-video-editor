@@ -8,16 +8,19 @@
   },
   "bb": {
     "name": "Video Editor",
-    "description": "A BB plugin with an example todo list.",
+    "description": "Edit video from a bb thread: the agent works on a timeline plan, the plugin renders it with ffmpeg.",
     "branding": {
-      "icon": "ListTodo"
+      "icon": "Clapperboard"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
   },
+  "scripts": {
+    "test": "node --test \"tests/*.spec.ts\"",
+    "test:mod": "claude plugin test .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.mod.json"
+  },
   "dependencies": {
-    "@radix-ui/react-checkbox": "^1.3.7",
-    "@radix-ui/react-slot": "^1.3.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {

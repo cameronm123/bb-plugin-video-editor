@@ -10,76 +10,70 @@
 // the full shadcn set, version-matched to this BB install. Run
 // `npm install` once before `bb plugin build`.
 import { useCallback, useEffect, useState } from "react";
-import type { FormEvent, ReactNode } from "react";
-import { definePluginApp, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
-import type { rpcContract, Todo } from "./server";
+import type { ReactNode } from "react";
+import { definePluginApp, useBbContext, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import type { rpcContract } from "./server";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Icon } from "@/components/ui/icon";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-/** The todo list, kept current by the server's "todos-changed" signal. */
-function useTodos() {
+interface Clip {
+  id: string;
+  media: { path: string; durationMs?: number };
+  startMs: number;
+  durationMs: number;
+  inMs: number;
+  outMs: number;
+  label?: string;
+  effects: { type: string }[];
+}
+interface Track {
+  id: string;
+  kind: "video" | "audio";
+  muted?: boolean;
+  clips: Clip[];
+}
+interface Plan {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  fps: number;
+  tracks: Track[];
+  markers: { id: string; atMs: number; name: string }[];
+  captions: { id: string; atMs: number; endMs: number; text: string }[];
+}
+
+/** mm:ss:ff — the unit editors actually read a timeline in. */
+function timecode(ms: number, fps: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  const frames = Math.floor(((ms % 1000) / 1000) * fps);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}:${String(frames).padStart(2, "0")}`;
+}
+
+function useTimeline(threadId: string | null) {
   const rpc = useRpc<typeof rpcContract>();
-  const [todos, setTodos] = useState<Todo[] | null>(null);
+  const [plan, setPlan] = useState<Plan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const report = useCallback((cause: unknown) => {
     setError(cause instanceof Error ? cause.message : String(cause));
   }, []);
   const refetch = useCallback(() => {
-    rpc.call("todos_list").then((result) => {
-      setTodos(result.todos);
-      setError(null);
-    }, report);
-  }, [rpc, report]);
+    if (threadId === null) return;
+    rpc
+      .call("timeline_get", { threadId })
+      .then((result) => {
+        setPlan(result.timeline as unknown as Plan);
+        setError(null);
+      }, report);
+  }, [rpc, report, threadId]);
   useEffect(() => {
     refetch();
   }, [refetch]);
-  // server.ts publishes after every write — from this page, another window,
-  // or `bb video-editor add` run by an agent — so the list never goes stale.
-  useRealtime("todos-changed", refetch);
-  return { rpc, todos, error, report, refetch };
-}
-
-function TodoRow({
-  todo,
-  onToggle,
-  onRemove,
-}: {
-  todo: Todo;
-  onToggle: (done: boolean) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <li className="flex items-center gap-3 py-2.5 text-sm">
-      <Checkbox
-        checked={todo.done}
-        onCheckedChange={(checked) => onToggle(checked === true)}
-        aria-label={`Mark "${todo.title}" ${todo.done ? "not done" : "done"}`}
-      />
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate",
-          todo.done && "text-muted-foreground line-through",
-        )}
-      >
-        {todo.title}
-      </span>
-      <span className="hidden font-mono text-xs text-muted-foreground sm:inline">
-        {todo.id}
-      </span>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="size-7 text-muted-foreground hover:text-foreground"
-        aria-label={`Remove "${todo.title}"`}
-        onClick={onRemove}
-      >
-        <Icon name="Trash2" className="size-4" />
-      </Button>
-    </li>
-  );
+  useRealtime("timeline-changed", refetch);
+  return { rpc, plan, error, report, refetch };
 }
 
 /** The dashed box BB's own list pages use for loading and empty states. */
@@ -94,87 +88,180 @@ function EmptyState({ children }: { children: ReactNode }) {
   );
 }
 
-// Tailwind classes compile against the host theme's live CSS variables —
-// derive colors from the theme tokens, never hardcoded grays. The frame
-// (scrolling page, centered column) matches BB's own nav-panel pages.
-function TodosPage() {
-  const { rpc, todos, error, report, refetch } = useTodos();
-  const [title, setTitle] = useState("");
-  const [pending, setPending] = useState(false);
-  const add = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const next = title.trim();
-    if (next === "" || pending) return;
-    setPending(true);
-    try {
-      await rpc.call("todos_add", { title: next });
-      setTitle("");
-      refetch();
-    } catch (cause) {
-      report(cause);
-    } finally {
-      setPending(false);
-    }
-  };
-  const doneCount = todos?.filter((todo) => todo.done).length ?? 0;
+function TrackRow({
+  track,
+  totalMs,
+  fps,
+}: {
+  track: Track;
+  totalMs: number;
+  fps: number;
+}) {
+  const span = Math.max(totalMs, 1);
+  return (
+    <div className="flex items-stretch gap-2">
+      <div className="w-16 shrink-0 pt-1 text-xs text-muted-foreground">
+        {track.kind === "video" ? "V" : "A"}
+        {track.muted ? " · mute" : ""}
+      </div>
+      <div className="relative h-9 min-w-0 flex-1 overflow-hidden rounded bg-muted">
+        {track.clips.length === 0 ? (
+          <span className="absolute inset-0 grid place-items-center text-xs text-muted-foreground">
+            empty
+          </span>
+        ) : null}
+        {track.clips.map((clip) => (
+          <div
+            key={clip.id}
+            title={`${clip.label ?? clip.media.path}\n${timecode(clip.startMs, fps)} → ${timecode(clip.startMs + clip.durationMs, fps)}`}
+            className="absolute top-1 bottom-1 overflow-hidden rounded border border-border bg-card px-1.5 text-[11px] leading-4"
+            style={{
+              left: `${(clip.startMs / span) * 100}%`,
+              width: `${Math.max((clip.durationMs / span) * 100, 1)}%`,
+            }}
+          >
+            <span className="block truncate">
+              {clip.label ?? clip.media.path.split("/").pop()}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function VideoEditorPage() {
+  const { threadId } = useBbContext();
+  const { rpc, plan, error, report, refetch } = useTimeline(threadId);
+  const [renderState, setRenderState] = useState<string>("idle");
+
+  useEffect(() => {
+    if (threadId === null) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const status = await rpc.call("render_status", { threadId });
+        if (cancelled) return;
+        setRenderState(status.state);
+        // Keep polling only while a render is in flight, so the badge does
+        // not refresh forever after it has settled.
+        if (status.state === "rendering") {
+          timer = setTimeout(poll, 1500);
+        }
+      } catch {
+        // The status endpoint is best-effort; a failed poll is not worth
+        // surfacing next to the real error channel.
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [rpc, threadId, plan]);
+
+  const totalMs =
+    plan?.tracks.reduce(
+      (max, track) =>
+        Math.max(
+          max,
+          ...track.clips.map((clip) => clip.startMs + clip.durationMs),
+        ),
+      0,
+    ) ?? 0;
+
   return (
     <div className="h-full min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto box-border w-full max-w-3xl px-4 pb-4 pt-3 md:px-5 md:pt-4">
-        <p className="text-sm text-muted-foreground">
-          Agents keep this list with <code>bb video-editor</code>; the skill in{" "}
-          <code>skills/example-todos</code> tells them how.
-        </p>
-        <form onSubmit={add} className="mt-4 flex items-center gap-2">
-          <Input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="What needs doing?"
-            aria-label="New todo"
-          />
-          <Button type="submit" disabled={pending || title.trim() === ""}>
-            <Icon name="Plus" className="size-4" />
-            Add
-          </Button>
-        </form>
-        {error === null ? null : (
-          <p role="alert" className="mt-3 text-sm text-destructive">
-            {error}
-          </p>
-        )}
-        <div className="mt-4">
-          {todos === null ? (
-            <EmptyState>Loading todos…</EmptyState>
-          ) : todos.length === 0 ? (
-            <EmptyState>
-              Nothing to do. Add one above, or run{" "}
-              <code>bb video-editor add "Ship it"</code>.
-            </EmptyState>
-          ) : (
-            <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card px-4">
-              {todos.map((todo) => (
-                <TodoRow
-                  key={todo.id}
-                  todo={todo}
-                  onToggle={(done) => {
-                    rpc
-                      .call("todos_set_done", { id: todo.id, done })
-                      .then(refetch, report);
-                  }}
-                  onRemove={() => {
-                    rpc
-                      .call("todos_remove", { id: todo.id })
-                      .then(refetch, report);
-                  }}
+        {plan === null ? (
+          <EmptyState>Loading timeline…</EmptyState>
+        ) : (
+          <>
+            <div className="flex items-baseline justify-between gap-3">
+              <h1 className="truncate text-lg font-semibold">{plan.name}</h1>
+              <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                {plan.width}×{plan.height} @ {plan.fps}fps · {timecode(totalMs, plan.fps)}
+              </span>
+            </div>
+            {error === null ? null : (
+              <p role="alert" className="mt-3 text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <div className="mt-4 space-y-2">
+              {plan.tracks.map((track) => (
+                <TrackRow
+                  key={track.id}
+                  track={track}
+                  totalMs={totalMs}
+                  fps={plan.fps}
                 />
               ))}
-            </ul>
-          )}
-        </div>
-        {todos !== null && todos.length > 0 ? (
-          <p className="mt-2 text-xs text-muted-foreground">
-            {doneCount} of {todos.length} done
-          </p>
-        ) : null}
+            </div>
+            {plan.markers.length > 0 ? (
+              <div className="mt-5">
+                <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Markers
+                </h2>
+                <ul className="mt-1.5 space-y-0.5 text-sm">
+                  {plan.markers.map((marker) => (
+                    <li key={marker.id} className="flex gap-2">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {timecode(marker.atMs, plan.fps)}
+                      </span>
+                      <span className="truncate">{marker.name}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {plan.captions.length > 0 ? (
+              <div className="mt-5">
+                <h2 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Captions
+                </h2>
+                <ul className="mt-1.5 space-y-0.5 text-sm">
+                  {plan.captions.map((caption) => (
+                    <li key={caption.id} className="flex gap-2">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {timecode(caption.atMs, plan.fps)}
+                      </span>
+                      <span className="truncate">{caption.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            <div className="mt-5 flex items-center gap-2">
+              <Button
+                disabled={threadId === null}
+                onClick={() => {
+                  if (threadId === null) return;
+                  rpc
+                    .call("timeline_render", { threadId })
+                    .then(refetch, report);
+                }}
+              >
+                <Icon name="Play" className="size-4" />
+                Render
+              </Button>
+              {renderState === "rendering" ? (
+                <span className="text-sm text-muted-foreground">Rendering…</span>
+              ) : null}
+              {renderState === "done" ? (
+                <span className="text-sm text-muted-foreground">Rendered</span>
+              ) : null}
+              {renderState === "failed" ? (
+                <span className="text-sm text-destructive">Render failed</span>
+              ) : null}
+            </div>
+            <p className="mt-4 text-xs text-muted-foreground">
+              Agents edit this timeline with the <code>video_edit</code> tool.
+              The skill in <code>skills/video-editing</code> tells them how.
+            </p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -187,12 +274,12 @@ function TodosPage() {
 // plugins chapter).
 export default definePluginApp((app) => {
   app.slots.navPanel({
-    id: "example-todos",
-    title: "Example todos",
-    icon: "ListTodo",
-    // Routed at /plugins/video-editor/example-todos; the component receives the
+    id: "video-editor",
+    title: "Video editor",
+    icon: "Clapperboard",
+    // Routed at /plugins/video-editor/video-editor; the component receives the
     // remainder as `subPath` for deep links within the page.
-    path: "example-todos",
-    component: TodosPage,
+    path: "video-editor",
+    component: VideoEditorPage,
   });
 });

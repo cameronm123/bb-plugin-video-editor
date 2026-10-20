@@ -1,0 +1,6 @@
+{
+  "name": "video-editor",
+  "version": "0.1.0",
+  "description": "Video editing: a /video command that shows the timeline digest and a video_edit tool that applies operations to the timeline plan and renders it with ffmpeg",
+  "author": { "name": "Cameron" }
+}

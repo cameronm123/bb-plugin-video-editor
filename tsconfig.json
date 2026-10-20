@@ -15,9 +15,13 @@
     "paths": {
       "@/*": [
         "./*"
+      ],
+      "claude-code/testing": [
+        "./hooks/claude-code-testing.ts"
       ]
     },
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": false
   },
   "include": [
@@ -25,6 +29,8 @@
     "app.tsx",
     "components",
     "lib",
-    "hooks"
+    "core",
+    "hooks",
+    "tests"
   ]
 }

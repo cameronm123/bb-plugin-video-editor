@@ -1,0 +1,4 @@
+{
+  "description": "Video editor hooks module",
+  "modules": ["./register.ts"]
+}

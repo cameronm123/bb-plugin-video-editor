@@ -1,21 +1,37 @@
-Keep a todo list beside the work it belongs to, in the sidebar and in
-your agent threads.
+Edit video from a bb thread. The agent works on a timeline plan, the plugin
+compiles it into an ffmpeg render.
 
 ## What you get
 
-- An **Example todos** page in the left sidebar that adds, completes, and
-  removes todos.
-- A `bb video-editor` command that does the same from a terminal.
-- Live updates, so a change made in one place reaches every open page at once.
+- A **Video editor** page in the left sidebar showing tracks, clips laid out to
+  scale, markers, captions, and the render state.
+- A `video_edit` agent tool. The agent shows the timeline, applies a batch of
+  named operations, and renders.
+- A `bb video` command that does the same from a terminal: `bb video timeline
+  show`, `bb video timeline apply --op '<json>'`, `bb video render`, and
+  `bb video probe` for reading a media file's real duration.
+- The same editing core as a Claude Code mod, so the same workflow works in
+  either tool.
 
 ## How it works
 
-The todos live in this plugin's own storage on the BB server, one list per
-installation. Nothing leaves the machine, and the plugin needs no account, API
-key, or external service.
+A real Premiere project is 40 MB of XML with a 17,000-node object graph. That
+is a poor interface for an agent, so this plugin keeps the plan as compact
+JSON and changes it only through named operations: `add_clip`, `trim_clip`,
+`move_clip`, `split_clip`, `set_effect`, `add_marker`, `add_caption`, and
+about six more.
+
+The agent reads the plan as a short text digest, applies a batch of operations
+in one call, and renders. Rendering compiles the plan into one ffmpeg command
+handling multi-track video, xfade transitions, opacity, scale, position, crop,
+speed, burned-in captions, and mixed audio.
 
 ## For agents
 
-The bundled skill tells an agent to read the list with `bb video-editor list`, add
-one todo at a time with `bb video-editor add`, and close finished work with
-`bb video-editor done`.
+The bundled skill teaches the operation set, the timing model (source in/out
+points versus timeline position), and the workflow: show, probe, apply, show
+again, render.
+
+## Requirements
+
+`ffmpeg` and `ffprobe` on `PATH`. Both paths are configurable.

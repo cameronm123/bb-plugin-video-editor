@@ -13,16 +13,22 @@ import {
   type VideoModsApi,
 } from "./video.ts";
 
-// The timeline plan persists in $.store (a JSON key-value store shared by
-// every session on the machine), under this namespaced key.
-const STORE_KEY = "video-editor.timeline";
-
 // The full name of the registered tool: mcp__, the plugin name from
 // .claude-plugin/plugin.json, and the name passed to $.tool.register.
 const TOOL_NAME = "mcp__video-editor__video_edit";
 
 // $.process.run caps at ten minutes.
 const FFMPEG_TIMEOUT_MS = 600000;
+
+/**
+ * The store key for a timeline. $.store is shared by every session on the
+ * machine, so the key carries the session's project root: one timeline per
+ * project, not one per machine.
+ */
+async function storeKey($: VideoModsApi): Promise<string> {
+  const root = await $.session.root();
+  return `video-editor.timeline:${root}`;
+}
 
 export function register(on: OnEvent) {
   on("session.start", async ($, e, next) => {
@@ -60,16 +66,24 @@ export function register(on: OnEvent) {
   });
 
   on("command.run", { command: "video" }, async ($) => {
-    const timeline = timelineFromStored(await $.store.get(STORE_KEY));
-    return { text: digestTimeline(timeline) };
+    const key = await storeKey($);
+    const { timeline, wasReset } = timelineFromStored(await $.store.get(key));
+    const note = wasReset
+      ? "The stored timeline could not be read and was reset to an empty plan.\n\n"
+      : "";
+    return { text: note + digestTimeline(timeline) };
   });
 
   on("tool.call", { tool: TOOL_NAME }, async ($, e: ToolCallEvent) => {
     try {
-      const timeline = timelineFromStored(await $.store.get(STORE_KEY));
+      const key = await storeKey($);
+      const { timeline, wasReset } = timelineFromStored(await $.store.get(key));
       const updated = reduceOperations(timeline, e.operations);
-      await $.store.set(STORE_KEY, updated);
-      let digest = digestTimeline(updated);
+      await $.store.set(key, updated);
+      const prefix = wasReset
+        ? "The stored timeline could not be read and was reset to an empty plan.\n\n"
+        : "";
+      let digest = prefix + digestTimeline(updated);
       if (typeof e.render === "string" && e.render !== "") {
         // The operations already applied and persisted, so a render failure
         // reports beside the digest instead of masking it as an error.

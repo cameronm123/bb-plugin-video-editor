@@ -14,8 +14,7 @@
 export interface SessionKit {
   session: {
     start(input: Record<string, unknown>): Promise<unknown>;
-  };
-  tool: {
+  };  tool: {
     call(input: Record<string, unknown>): Promise<{
       result?: unknown;
       text?: string;

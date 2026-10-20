@@ -39,6 +39,7 @@ export interface ProcessRunResult {
 export interface VideoModsApi {
   command: { register(spec: CommandSpec): Promise<unknown> };
   tool: { register(spec: ToolSpec): Promise<{ tool: string }> };
+  session: { root(): Promise<string> };
   store: {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
@@ -120,9 +121,17 @@ function isTimeline(value: unknown): value is Timeline {
   );
 }
 
-/** The stored timeline, or the default plan when nothing valid is stored. */
-export function timelineFromStored(stored: unknown): Timeline {
-  return isTimeline(stored) ? stored : emptyTimeline();
+/**
+ * The stored timeline, or the default plan when nothing valid is stored.
+ * The second value says whether the stored plan was usable, so a caller can
+ * tell the user their edit was reset rather than silently losing it.
+ */
+export function timelineFromStored(stored: unknown): {
+  timeline: Timeline;
+  wasReset: boolean;
+} {
+  if (isTimeline(stored)) return { timeline: stored, wasReset: false };
+  return { timeline: emptyTimeline(), wasReset: stored !== undefined };
 }
 
 /**

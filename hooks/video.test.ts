@@ -19,6 +19,9 @@ async function startSession($: SessionKit, on: StubFn): Promise<void> {
   mock.store(on);
   on("command.register", () => ({ value: undefined }));
   on("tool.register", () => ({ value: undefined }));
+  // The store key carries the session's project root, so the mod keeps one
+  // timeline per project rather than one per machine.
+  on("session.root", () => ({ value: "/work" }));
   on("session.start", () => ({ cwd: "/work" }));
   await $.session.start({ surface: "terminal", isInteractive: true, cwd: "/work" });
 }

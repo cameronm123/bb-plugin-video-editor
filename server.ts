@@ -50,6 +50,12 @@ const timelineSchema = z.object({
           inMs: z.number(),
           outMs: z.number(),
           label: z.string().optional(),
+          transition: z
+            .object({
+              name: z.string(),
+              durationMs: z.number(),
+            })
+            .optional(),
           effects: z.array(
             z.object({
               type: z.enum([

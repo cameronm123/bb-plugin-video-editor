@@ -80,12 +80,13 @@ ffmpeg itself with `$.process.run`.
 
 `add_clip`, `trim_clip`, `move_clip`, `remove_clip`, `set_effect`,
 `split_clip`, `add_marker`, `remove_marker`, `add_caption`, `remove_caption`,
-`set_property`, `add_track`, `remove_track`, `mute_track`.
+`set_property`, `add_track`, `remove_track`, `mute_track`, `set_transition`.
 
 Effects: `opacity`, `scale`, `position`, `crop`, `volume`, `fadeIn`, `fadeOut`,
 `speed`.
 
-See `skills/video-editing/SKILL.md` for the full table and the workflow.
+See `skills/video-editing/SKILL.md` for the full table, the digest format, and
+the workflow.
 
 ## Requirements
 

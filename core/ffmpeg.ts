@@ -121,8 +121,8 @@ function cropFilter(clip: Clip): string | undefined {
   const to = Math.min(Math.max(effect.to ?? 1, from), 1);
   if (to - from <= 0) return undefined;
   // Crop keeps the box from fraction `from` to fraction `to` on both axes.
-  // The fraction is rounded to a whole number of pixels, so the filter text
-  // does not carry a float artefact like 0.6000000000000001.
+  // The fraction is rounded to three decimals, so the filter text does not
+  // carry a float artefact like 0.6000000000000001.
   const width = Math.round((to - from) * 1000) / 1000;
   const offset = Math.round(from * 1000) / 1000;
   return `crop=w=iw*${width}:h=ih*${width}:x=iw*${offset}:y=ih*${offset}`;
@@ -488,6 +488,19 @@ export function compileFfmpeg(
       `[${videoLabel}]subtitles=filename=${escapeFilterPath(opts.captionFile)}[${outLabel}]`,
     );
     videoLabel = outLabel;
+  }
+
+  if (audioLabel !== undefined) {
+    // The mix runs as long as its longest input, which can be longer than
+    // the video. Trimming the mix to the plan's duration keeps the file the
+    // length the plan says.
+    const planMs = timelineDurationMs(timeline);
+    if (planMs > 0) {
+      graph.push(
+        `[${audioLabel}]atrim=end=${sec(planMs)},asetpts=PTS-STARTPTS[amixout]`,
+      );
+      audioLabel = "amixout";
+    }
   }
 
   const filterGraph = graph.join(";");

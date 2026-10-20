@@ -11,7 +11,9 @@ function effectText(effect: Effect): string {
     case "crop":
       return `crop(from=${effect.from ?? 0},to=${effect.to ?? 1})`;
     case "speed":
-      return `speed(to=${effect.to ?? 1})`;
+      // The compiler prefers `to` and falls back to `from`, so the digest
+      // must show the rate that will actually be used.
+      return `speed(to=${effect.to ?? effect.from ?? 1})`;
     default:
       return `${effect.type}=${effect.amount ?? ""}`;
   }
@@ -49,7 +51,10 @@ export function digestTimeline(timeline: Timeline): string {
         ? `video${videoIndex}${videoIndex === 1 ? " (base)" : ""}`
         : "audio";
     lines.push(
-      `track ${track.id} [${kindLabel}]${track.muted ? " MUTED" : ""}`,
+      `track ${track.id} [${kindLabel}]` +
+        // Only an audio track can be muted: a muted video track still
+        // renders, so saying MUTED would be a lie.
+        (track.muted && track.kind === "audio" ? " MUTED" : ""),
     );
     if (track.clips.length === 0) {
       lines.push("  (empty)");

@@ -209,6 +209,19 @@ export default async function plugin(bb: BbPluginApi) {
      )`,
   ]);
 
+  // A render that was running when the plugin reloaded leaves its row at
+  // "rendering" forever, because the fire-and-forget promise died with the
+  // old generation. Nothing is running any more, so the row is reconciled
+  // when the plugin loads.
+  db.prepare(
+    `UPDATE renders SET state = 'failed', message = ? WHERE state = 'rendering'`,
+  ).run("The render was interrupted (the plugin reloaded).");
+
+  // Output paths currently being written. Two ffmpeg processes writing one
+  // file produce a corrupt file, so a second render of the same path is
+  // refused while the first is running.
+  const activeRenders = new Set<string>();
+
   const key = (scope: string) => `timeline:${scope}`;
 
   // A thread's plan is scoped to the thread. A CLI call outside a thread has
@@ -243,6 +256,70 @@ export default async function plugin(bb: BbPluginApi) {
     };
   }
 
+  /**
+   * Start a render. Every surface goes through here, so the guards and the
+   * bookkeeping are the same wherever a render comes from.
+   */
+  async function startRender(
+    scope: string,
+    timeline: Timeline,
+    outputPath: string | undefined,
+  ): Promise<{ started: boolean; outputPath?: string; message: string }> {
+    if (!timeline.tracks.some((track) => track.clips.length > 0)) {
+      return {
+        started: false,
+        message: "Timeline has no clips. Add a clip before rendering.",
+      };
+    }
+    const target =
+      outputPath ??
+      `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
+    if (activeRenders.has(target)) {
+      return {
+        started: false,
+        message: `A render to ${target} is already running.`,
+      };
+    }
+    // Rendering onto one of the timeline's own source files would have ffmpeg
+    // read and overwrite the same file.
+    const sources = new Set(
+      timeline.tracks.flatMap((track) => track.clips.map((clip) => clip.media.path)),
+    );
+    if (sources.has(target)) {
+      return {
+        started: false,
+        message: `${target} is a source file of this timeline. Render somewhere else.`,
+      };
+    }
+    const renderId = randomUUID();
+    activeRenders.add(target);
+    db.prepare(
+      `INSERT INTO renders (id, thread_id, output_path, state, message, created_at)
+       VALUES (?, ?, ?, 'rendering', '', ?)`,
+    ).run(renderId, scope, target, new Date().toISOString());
+    bb.realtime.publish(TIMELINE_CHANGED, { scope });
+    // Fire and forget: the render outlives this call, so the agent is not
+    // blocked on ffmpeg. Poll render_status for the outcome. The update
+    // names the render's own id: two renders to the same path must not
+    // overwrite each other's row.
+    void renderTimeline(timeline, target, { ffmpegPath })
+      .then((result) => {
+        db.prepare(
+          `UPDATE renders SET state = 'done', message = ? WHERE id = ?`,
+        ).run(`Rendered in ${result.durationMs}ms`, renderId);
+      })
+      .catch((cause: unknown) => {
+        db.prepare(
+          `UPDATE renders SET state = 'failed', message = ? WHERE id = ?`,
+        ).run(cause instanceof Error ? cause.message : String(cause), renderId);
+      })
+      .finally(() => {
+        activeRenders.delete(target);
+        bb.realtime.publish(TIMELINE_CHANGED, { scope });
+      });
+    return { started: true, outputPath: target, message: `Rendering to ${target}` };
+  }
+
   bb.rpc.register(rpcContract, {
     timeline_get: async ({ threadId }) => ({
       timeline: wirePlan(await readTimeline(threadId)) as Timeline,
@@ -257,41 +334,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     timeline_render: async ({ threadId, outputPath }) => {
       const timeline = await readTimeline(threadId);
-      const hasClips = timeline.tracks.some((track) => track.clips.length > 0);
-      if (!hasClips) {
-        return {
-          started: false,
-          message: "Timeline has no clips. Add a clip before rendering.",
-        };
-      }
-      const target =
-        outputPath ??
-        `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
-      const renderId = randomUUID();
-      db.prepare(
-        `INSERT INTO renders (id, thread_id, output_path, state, message, created_at)
-         VALUES (?, ?, ?, 'rendering', '', ?)`,
-      ).run(renderId, threadId, target, new Date().toISOString());
-      bb.realtime.publish(TIMELINE_CHANGED, { threadId });
-      // Fire and forget: the render outlives this call, so the agent is not
-      // blocked on ffmpeg. Poll render_status for the outcome. The update
-      // names the render's own id: two renders to the same path must not
-      // overwrite each other's row.
-      void renderTimeline(timeline, target, { ffmpegPath })
-        .then((result) => {
-          db.prepare(
-            `UPDATE renders SET state = 'done', message = ? WHERE id = ?`,
-          ).run(`Rendered in ${result.durationMs}ms`, renderId);
-        })
-        .catch((cause: unknown) => {
-          db.prepare(
-            `UPDATE renders SET state = 'failed', message = ? WHERE id = ?`,
-          ).run(cause instanceof Error ? cause.message : String(cause), renderId);
-        })
-        .finally(() => {
-          bb.realtime.publish(TIMELINE_CHANGED, { threadId });
-        });
-      return { started: true, outputPath: target, message: `Rendering to ${target}` };
+      return startRender(threadId, timeline, outputPath);
     },
     render_status: async ({ threadId }) => {
       const row = db
@@ -361,15 +404,13 @@ export default async function plugin(bb: BbPluginApi) {
         const result = await applyToScope(scopeFor(ctx), operations);
         return `${result.applied} operation(s) applied.\n\n${result.digest}`;
       }
-      const timeline = await readTimeline(scopeFor(ctx));
-      const target =
-        params.outputPath ??
-        `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
-      const result = await renderTimeline(timeline, target, {
-        ffmpegPath,
-        signal: ctx.signal,
-      });
-      return `Rendered to ${result.outputPath} in ${result.durationMs}ms.`;
+      const scope = scopeFor(ctx);
+      const timeline = await readTimeline(scope);
+      const result = await startRender(scope, timeline, params.outputPath);
+      if (!result.started) {
+        return result.message;
+      }
+      return `Render started: ${result.message}. Poll with the video_edit action "render" or the bb video render-status command.`;
     },
   });
 
@@ -388,6 +429,11 @@ export default async function plugin(bb: BbPluginApi) {
         name: "render",
         summary: "Render the timeline",
         usage: "bb video render [--thread <id>] [--out <path>]",
+      },
+      {
+        name: "status",
+        summary: "Show the last render's state",
+        usage: "bb video status [--thread <id>]",
       },
     ],
     async run(argv, ctx) {
@@ -431,25 +477,48 @@ export default async function plugin(bb: BbPluginApi) {
           const parsed: unknown = JSON.parse(raw);
           const operations = Array.isArray(parsed) ? parsed : [parsed];
           const result = await applyToScope(scope, operations);
-          return reply(result, result.digest);
+          return reply({ timeline: result.timeline, digest: result.digest }, result.digest);
         }
         const timeline = await readTimeline(scope);
-        return reply(timeline, digestTimeline(timeline));
+        return reply(
+          { timeline, digest: digestTimeline(timeline) },
+          digestTimeline(timeline),
+        );
       }
 
       if (command === "render") {
         const timeline = await readTimeline(scope);
-        const target =
-          flag("--out") ??
-          `${renderRoot || process.cwd()}/${timeline.name.replace(/[^\w.-]+/g, "_") || "output"}.mp4`;
-        const result = await renderTimeline(timeline, target, { ffmpegPath });
-        return reply(result, `Rendered to ${result.outputPath}`);
+        const result = await startRender(scope, timeline, flag("--out"));
+        if (!result.started) {
+          return { exitCode: 1, stderr: result.message };
+        }
+        return reply(result, result.message);
+      }
+
+      if (command === "status") {
+        const row = db
+          .prepare(
+            `SELECT state, output_path, message FROM renders
+             WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`,
+          )
+          .get(scope) as
+          | { state: string; output_path: string; message: string }
+          | undefined;
+        const value =
+          row === undefined
+            ? { state: "idle", message: "No render yet" }
+            : {
+                state: row.state,
+                outputPath: row.output_path,
+                message: row.message,
+              };
+        return reply(value, `${value.state}: ${value.message}`);
       }
 
       return {
         exitCode: 1,
         stderr:
-          "Usage:\n  bb video probe <path>\n  bb video timeline show|apply [--op <json>]\n  bb video render [--out <path>]",
+          "Usage:\n  bb video probe <path>\n  bb video timeline show|apply [--op <json>]\n  bb video render [--out <path>]\n  bb video status",
       };
     },
   });

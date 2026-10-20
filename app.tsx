@@ -44,13 +44,13 @@ interface Plan {
   captions: { id: string; atMs: number; endMs: number; text: string }[];
 }
 
-/** mm:ss.cs — the unit editors actually read a timeline in. */
-function timecode(ms: number): string {
+/** mm:ss:ff — the unit editors actually read a timeline in. */
+function timecode(ms: number, fps: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  const frames = Math.floor(((ms % 1000) / 1000) * 30);
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(frames).padStart(2, "0")}`;
+  const frames = Math.floor(((ms % 1000) / 1000) * fps);
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}:${String(frames).padStart(2, "0")}`;
 }
 
 function useTimeline(threadId: string | null) {
@@ -91,9 +91,11 @@ function EmptyState({ children }: { children: ReactNode }) {
 function TrackRow({
   track,
   totalMs,
+  fps,
 }: {
   track: Track;
   totalMs: number;
+  fps: number;
 }) {
   const span = Math.max(totalMs, 1);
   return (
@@ -111,7 +113,7 @@ function TrackRow({
         {track.clips.map((clip) => (
           <div
             key={clip.id}
-            title={`${clip.label ?? clip.media.path}\n${timecode(clip.startMs)} → ${timecode(clip.startMs + clip.durationMs)}`}
+            title={`${clip.label ?? clip.media.path}\n${timecode(clip.startMs, fps)} → ${timecode(clip.startMs + clip.durationMs, fps)}`}
             className="absolute top-1 bottom-1 overflow-hidden rounded border border-border bg-card px-1.5 text-[11px] leading-4"
             style={{
               left: `${(clip.startMs / span) * 100}%`,
@@ -136,12 +138,17 @@ function VideoEditorPage() {
   useEffect(() => {
     if (threadId === null) return;
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       try {
         const status = await rpc.call("render_status", { threadId });
         if (cancelled) return;
         setRenderState(status.state);
-        if (status.state === "rendering") setTimeout(poll, 1500);
+        // Keep polling only while a render is in flight, so the badge does
+        // not refresh forever after it has settled.
+        if (status.state === "rendering") {
+          timer = setTimeout(poll, 1500);
+        }
       } catch {
         // The status endpoint is best-effort; a failed poll is not worth
         // surfacing next to the real error channel.
@@ -150,6 +157,7 @@ function VideoEditorPage() {
     void poll();
     return () => {
       cancelled = true;
+      if (timer !== undefined) clearTimeout(timer);
     };
   }, [rpc, threadId, plan]);
 
@@ -173,7 +181,7 @@ function VideoEditorPage() {
             <div className="flex items-baseline justify-between gap-3">
               <h1 className="truncate text-lg font-semibold">{plan.name}</h1>
               <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                {plan.width}×{plan.height} @ {plan.fps}fps · {timecode(totalMs)}
+                {plan.width}×{plan.height} @ {plan.fps}fps · {timecode(totalMs, plan.fps)}
               </span>
             </div>
             {error === null ? null : (
@@ -183,7 +191,12 @@ function VideoEditorPage() {
             )}
             <div className="mt-4 space-y-2">
               {plan.tracks.map((track) => (
-                <TrackRow key={track.id} track={track} totalMs={totalMs} />
+                <TrackRow
+                  key={track.id}
+                  track={track}
+                  totalMs={totalMs}
+                  fps={plan.fps}
+                />
               ))}
             </div>
             {plan.markers.length > 0 ? (
@@ -195,7 +208,7 @@ function VideoEditorPage() {
                   {plan.markers.map((marker) => (
                     <li key={marker.id} className="flex gap-2">
                       <span className="font-mono text-xs text-muted-foreground">
-                        {timecode(marker.atMs)}
+                        {timecode(marker.atMs, plan.fps)}
                       </span>
                       <span className="truncate">{marker.name}</span>
                     </li>
@@ -212,7 +225,7 @@ function VideoEditorPage() {
                   {plan.captions.map((caption) => (
                     <li key={caption.id} className="flex gap-2">
                       <span className="font-mono text-xs text-muted-foreground">
-                        {timecode(caption.atMs)}
+                        {timecode(caption.atMs, plan.fps)}
                       </span>
                       <span className="truncate">{caption.text}</span>
                     </li>

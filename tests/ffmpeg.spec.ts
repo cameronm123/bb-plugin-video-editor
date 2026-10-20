@@ -212,7 +212,18 @@ test("audio tracks mix with adelay placement and amix", () => {
     filterGraph.includes("amix=inputs=2:duration=longest:normalize=0"),
     filterGraph,
   );
-  assert.deepEqual(args.slice(-6), ["-map", "[amix]", "-c:a", "aac", "-y", "/out.mp4"]);
+  // The mix is trimmed to the plan's duration, so audio that runs past the
+  // video does not lengthen the file. The video track ends at 2000ms, and
+  // the video defines the program length.
+  assert.ok(filterGraph.includes("atrim=end=2"), filterGraph);
+  assert.deepEqual(args.slice(-6), [
+    "-map",
+    "[amixout]",
+    "-c:a",
+    "aac",
+    "-y",
+    "/out.mp4",
+  ]);
 });
 
 test("muted audio tracks render silent (no chains)", () => {

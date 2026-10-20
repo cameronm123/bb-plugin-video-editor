@@ -22,27 +22,38 @@ ffmpeg command. Never write the plan by hand — apply operations to it.
 
 ## The digest
 
-The digest looks like this. It is the whole timeline, in a form you can read
-and reason about.
+The digest is the whole timeline, in a form you can read and reason about.
+This is a real one:
 
 ```
-Timeline "Demo" 1920x1080 @30fps — 12.5s
-
-Video 1
-  [c1] 00:00.00 → 00:04.00  intro.mp4  (in 0.0s, out 4.0s)
-  [c2] 00:04.00 → 00:09.00  b-roll.mp4  (in 1.2s, out 6.2s)  effects: fadeIn
-
-Audio 1
-  [c3] 00:00.00 → 00:09.00  voice.wav  (in 0.0s, out 9.0s)  effects: volume 0.8
-
-Markers
-  00:02.00  hook
-Captions
-  00:00.50 → 00:03.00  "First words"
+timeline "Untitled" 1920x1080 @30fps 9000ms
+track video-1 [video1 (base)]
+  clip-1 @0+4000ms in=0 out=4000 src=/tmp/skilldemo2/t1.mp4 "intro"
+  clip-2 @4000+5000ms in=1200 out=6200 src=/tmp/skilldemo2/t2.mp4
+    effects: fadeIn=0.5
+track audio-1 [audio]
+  clip-3 @0+9000ms in=0 out=9000 src=/tmp/skilldemo2/t1.mp4
+    effects: volume=0.8
+markers:
+  marker-1 @2000ms "hook"
+captions:
+  caption-1 @500-3000ms "First words"
 ```
 
-Times are `mm:ss.ff` at 30 fps. All times in the plan are integer
-milliseconds.
+How to read a clip line:
+
+- `clip-1` — the id. Address it in `trim_clip`, `move_clip`, `remove_clip`,
+  `set_effect`, `split_clip` and `set_transition`. Ids are unique across the
+  whole timeline, so a clip on the audio track is never confused with a clip
+  on the video track.
+- `@0+4000ms` — where it sits on the timeline, and for how long.
+- `in=0 out=4000` — the source range it takes. This is *source* time, not
+  timeline time.
+- `src=` — the media file.
+- `[enter:xfade fade 500ms]` — a transition into this clip. Only set by
+  `set_transition`.
+
+All times in the plan are integer milliseconds.
 
 ## Operations
 
@@ -64,7 +75,8 @@ Each operation is an object with a `type` field. Pass them as a list to
 | `set_property` | `name?`, `width?`, `height?`, `fps?` | Change the sequence |
 | `add_track` | `kind: "video" \| "audio"` | Add a track |
 | `remove_track` | `trackId` | Remove a track and its clips |
-| `mute_track` | `trackId`, `muted` | Mute or unmute a track |
+| `mute_track` | `trackId`, `muted` | Mute or unmute an audio track |
+| `set_transition` | `clipId`, `name`, `durationMs` | Cross-fade into a clip |
 
 ### Effects
 
@@ -86,6 +98,21 @@ track, `position` shifts the picture and leaves black where it moved away
 from, so a picture pushed off the edge is partly out of frame. To place a
 picture over another one, put it on a second video track.
 
+### Transitions
+
+`set_transition` cross-fades into a clip. It needs:
+
+- the clip to be on a video track,
+- the clip to be exactly adjacent to the one before it, and
+- a `durationMs` shorter than the clip.
+
+`name` is an ffmpeg xfade transition: `fade`, `wipeleft`, `wiperight`,
+`slideup`, `slidedown`, `circleopen`, `dissolve`, `pixelize`, and the rest
+of ffmpeg's list. `fade` is the safe default.
+
+A transition shortens the render by its own duration, because the cross-fade
+overlaps the two clips. Everything after it moves that much earlier.
+
 ## Workflow
 
 1. `show` to see the timeline and learn the clip ids.
@@ -103,9 +130,14 @@ picture over another one, put it on a second video track.
   the clip sits on the timeline. They are different numbers.
 - **Clips on one track must not overlap.** Split a track into two tracks
   instead of stacking overlapping clips.
+- **A `speed` effect needs enough source.** A clip that is 4000ms on the
+  timeline at 2x needs 8000ms of source. The operation refuses a rate the
+  source cannot fill, so shorten the clip or slow it down first.
 - **One `apply` per logical edit.** A batch that fails leaves the whole batch
   unapplied.
-- **Render last.** Rendering is the slow step.
+- **Render last.** Rendering is the slow step. `render` starts the render and
+  returns; the file is finished a moment later. Poll with `bb video status`
+  or the `render_status` RPC.
 
 ## From a shell
 
@@ -115,8 +147,12 @@ The same edits are available without the tool:
 bb video timeline show
 bb video timeline apply --op '{"type":"add_marker","atMs":2000,"name":"hook"}'
 bb video render --out /tmp/out.mp4
+bb video status
 bb video probe /path/to/file.mp4
 ```
 
 `bb video timeline` and `bb video render` act on the current thread. Pass
 `--thread <id>` to target another one.
+
+With `--json`, every command returns the same envelope:
+`{"timeline": {...}, "digest": "..."}` for the timeline commands.

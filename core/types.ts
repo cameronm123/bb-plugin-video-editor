@@ -80,14 +80,23 @@ export interface Timeline {
   captions: Caption[]; // subtitle track, burned in at render
 }
 
-/** Last moment covered by any clip, in timeline coordinates. */
+/**
+ * The program length: the end of the last video clip, or the end of the last
+ * clip on any track when the plan has no video. A video track defines the
+ * length, so audio running past it does not stretch the program.
+ */
 export function timelineDurationMs(timeline: Timeline): Millis {
-  let end = 0;
-  for (const track of timeline.tracks) {
-    for (const clip of track.clips) {
-      const at = clip.startMs + clip.durationMs;
-      if (at > end) end = at;
+  const endOf = (kind: "video" | "audio"): Millis => {
+    let end = 0;
+    for (const track of timeline.tracks) {
+      if (track.kind !== kind) continue;
+      for (const clip of track.clips) {
+        const at = clip.startMs + clip.durationMs;
+        if (at > end) end = at;
+      }
     }
-  }
-  return end;
+    return end;
+  };
+  const videoEnd = endOf("video");
+  return videoEnd > 0 ? videoEnd : endOf("audio");
 }

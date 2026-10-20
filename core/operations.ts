@@ -370,9 +370,9 @@ export function validateOperation(input: unknown): Operation {
 // need ffmpeg. Deterministic id generation keeps it pure: ids derive from the
 // state itself, never from a clock or RNG.
 
-function nextId(existing: Iterable<{ id: string }>, prefix: string): string {
+function nextId(existing: Iterable<string>, prefix: string): string {
   let max = 0;
-  for (const { id } of existing) {
+  for (const id of existing) {
     if (id.startsWith(`${prefix}-`)) {
       const suffix = Number(id.slice(prefix.length + 1));
       if (Number.isInteger(suffix)) {
@@ -383,6 +383,15 @@ function nextId(existing: Iterable<{ id: string }>, prefix: string): string {
   return `${prefix}-${max + 1}`;
 }
 
+/**
+ * A clip id unique across the whole timeline. Numbering per track would
+ * make "clip-1" ambiguous the moment a plan has two tracks, and an agent
+ * addressing a clip by id would always get the first one.
+ */
+function nextClipId(timeline: Timeline): ClipId {
+  const used = timeline.tracks.flatMap((t) => t.clips.map((c) => c.id));
+  return nextId(used, "clip");
+}
 function findTrack(timeline: Timeline, trackId: string): Track {
   const track = timeline.tracks.find((t) => t.id === trackId);
   if (track === undefined) throw new Error(`no track with id "${trackId}"`);
@@ -439,7 +448,7 @@ export function applyOperation(
     case "add_clip": {
       const track = findTrack(timeline, operation.trackId);
       const clip: Clip = {
-        id: operation.id ?? nextId(track.clips, "clip"),
+        id: operation.id ?? nextClipId(timeline),
         media: operation.media,
         startMs: operation.startMs,
         durationMs: operation.durationMs,
@@ -554,7 +563,7 @@ export function applyOperation(
       };
       const right: Clip = {
         ...clip,
-        id: nextId(track.clips, "clip"),
+        id: nextClipId(timeline),
         startMs: operation.atMs,
         durationMs: endMs - operation.atMs,
         inMs: splitSource,
@@ -574,7 +583,7 @@ export function applyOperation(
 
     case "add_marker": {
       const marker: Marker = {
-        id: operation.id ?? nextId(timeline.markers, "marker"),
+        id: operation.id ?? nextId(timeline.markers.map((m) => m.id), "marker"),
         atMs: operation.atMs,
         name: operation.name,
         color: operation.color,
@@ -600,7 +609,7 @@ export function applyOperation(
         throw new Error("add_caption: endMs must be greater than atMs");
       }
       const caption: Caption = {
-        id: operation.id ?? nextId(timeline.captions, "caption"),
+        id: operation.id ?? nextId(timeline.captions.map((c) => c.id), "caption"),
         atMs: operation.atMs,
         endMs: operation.endMs,
         text: operation.text,
@@ -637,7 +646,7 @@ export function applyOperation(
 
     case "add_track": {
       const track: Track = {
-        id: operation.id ?? nextId(timeline.tracks, "track"),
+        id: operation.id ?? nextId(timeline.tracks.map((t) => t.id), "track"),
         kind: operation.kind,
         clips: [],
       };
@@ -653,7 +662,14 @@ export function applyOperation(
     }
 
     case "mute_track": {
-      findTrack(timeline, operation.trackId);
+      const track = findTrack(timeline, operation.trackId);
+      // Only an audio track can be muted. A muted video track would still
+      // render, so the operation is refused rather than silently ignored.
+      if (track.kind !== "audio") {
+        throw new Error(
+          `mute_track: track "${track.id}" is a video track. Only an audio track can be muted; remove the track or its clips instead.`,
+        );
+      }
       return {
         ...timeline,
         tracks: timeline.tracks.map((t) =>

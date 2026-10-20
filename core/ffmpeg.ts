@@ -94,14 +94,23 @@ function shiftFn(cuts: TransitionCut[]): (ms: Millis) => Millis {
 // --- per-clip filter chains -------------------------------------------------
 
 function trimChain(clip: Clip): string {
-  const parts = [
-    `trim=start=${sec(clip.inMs)}:end=${sec(clip.outMs)}`,
-    "setpts=PTS-STARTPTS",
-  ];
+  const parts = [`trim=start=${sec(clip.inMs)}:end=${sec(clip.outMs)}`];
   const rate = speedRate(clip);
-  if (rate !== undefined && rate !== 1) {
-    parts.push(`setpts=PTS/${rate}`);
+  if (rate === undefined || rate === 1) {
+    parts.push("setpts=PTS-STARTPTS");
+    return parts.join(",");
   }
+  // A speed effect changes the source rate, so the source range has to be
+  // taken from the clip's TIMELINE duration: source = timeline * rate. Using
+  // the plan's own in/out would render a different length than the plan
+  // says, and every later clip would drift out of the frame. The source has
+  // to be long enough for that, which set_effect checks.
+  const sourceMs = Math.round(clip.durationMs * rate);
+  parts.push(
+    `trim=start=${sec(clip.inMs)}:end=${sec(clip.inMs + sourceMs)}`,
+    "setpts=PTS-STARTPTS",
+    `setpts=PTS/${rate}`,
+  );
   return parts.join(",");
 }
 
@@ -236,13 +245,30 @@ function overlayPosition(clip: Clip): { x: string; y: string } {
 
 /** Audio-track clip chain: placed with adelay (integer milliseconds). */
 function audioClipChain(clip: Clip, startMs: Millis): string {
+  const rate = speedRate(clip);
+  // As on the video side, the source range follows the clip's timeline
+  // duration, so a speed effect changes the rate without changing the
+  // length the clip occupies on the timeline.
+  const sourceMs =
+    rate === undefined || rate === 1
+      ? clip.outMs - clip.inMs
+      : Math.round(clip.durationMs * rate);
   const parts = [
-    `atrim=start=${sec(clip.inMs)}:end=${sec(clip.outMs)}`,
+    `atrim=start=${sec(clip.inMs)}:end=${sec(clip.inMs + sourceMs)}`,
     "asetpts=PTS-STARTPTS",
   ];
-  const rate = speedRate(clip);
   if (rate !== undefined && rate !== 1) {
-    parts.push(`atempo=${rate}`);
+    // atempo only accepts 0.5 to 2, so a faster or slower rate is chained.
+    let remaining = rate;
+    while (remaining > 2) {
+      parts.push("atempo=2");
+      remaining /= 2;
+    }
+    while (remaining < 0.5) {
+      parts.push("atempo=0.5");
+      remaining /= 0.5;
+    }
+    if (remaining !== 1) parts.push(`atempo=${remaining}`);
   }
   const volume = effectOf(clip, "volume");
   if (volume !== undefined && volume.amount !== undefined) {

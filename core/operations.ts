@@ -67,7 +67,14 @@ export type Operation =
     }
   | { type: "add_track"; kind: "video" | "audio"; id?: string }
   | { type: "remove_track"; trackId: string }
-  | { type: "mute_track"; trackId: string; muted: boolean };
+  | { type: "mute_track"; trackId: string; muted: boolean }
+  | {
+      type: "set_transition";
+      clipId: string;
+      /** ffmpeg xfade transition name, e.g. "fade", "wipeleft". */
+      name: string;
+      durationMs: Millis;
+    };
 
 // --- boundary guards: plain predicates over `unknown`, no casts ------------
 
@@ -171,6 +178,43 @@ function effect(value: unknown): Effect {
   parsed.y = optNumber(value.y, "effect.y");
   parsed.from = optNumber(value.from, "effect.from");
   parsed.to = optNumber(value.to, "effect.to");
+  // The ranges the skill documents. A value outside them is a mistake, not
+  // something to clamp silently at render time.
+  if (parsed.amount !== undefined) {
+    const range = type === "scale" ? [0, 2] : [0, 1];
+    if (parsed.amount < range[0] || parsed.amount > range[1]) {
+      throw new Error(
+        `invalid operation: "effect.amount" for ${type} must be between ${range[0]} and ${range[1]}`,
+      );
+    }
+  }
+  if (parsed.x !== undefined && (parsed.x < -1 || parsed.x > 1)) {
+    throw new Error(
+      `invalid operation: "effect.x" must be between -1 and 1`,
+    );
+  }
+  if (parsed.y !== undefined && (parsed.y < -1 || parsed.y > 1)) {
+    throw new Error(
+      `invalid operation: "effect.y" must be between -1 and 1`,
+    );
+  }
+  if (parsed.from !== undefined && type !== "speed" && (parsed.from < 0 || parsed.from > 1)) {
+    throw new Error(
+      `invalid operation: "effect.from" must be between 0 and 1`,
+    );
+  }
+  if (parsed.to !== undefined && type !== "speed" && (parsed.to < 0 || parsed.to > 1)) {
+    throw new Error(
+      `invalid operation: "effect.to" must be between 0 and 1`,
+    );
+  }
+  // A speed rate of 0 or a negative one would produce no output at all.
+  const rate = parsed.to ?? parsed.from;
+  if (type === "speed" && rate !== undefined && (rate <= 0 || rate > 16)) {
+    throw new Error(
+      `invalid operation: a speed rate must be greater than 0 and at most 16, got ${rate}`,
+    );
+  }
   return parsed;
 }
 
@@ -298,9 +342,16 @@ function operationFields(raw: Record<string, unknown>): Operation {
         trackId: str(f.trackId, "trackId"),
         muted: bool(f.muted, "muted"),
       };
+    case "set_transition":
+      return {
+        type,
+        clipId: str(f.clipId, "clipId"),
+        name: str(f.name, "name"),
+        durationMs: positiveInt(f.durationMs, "durationMs"),
+      };
     default:
       throw new Error(
-        `invalid operation: unknown type "${String(type)}" — expected one of add_clip, trim_clip, move_clip, remove_clip, set_effect, split_clip, add_marker, remove_marker, add_caption, remove_caption, set_property, add_track, remove_track, mute_track`,
+        `invalid operation: unknown type "${String(type)}" — expected one of add_clip, trim_clip, move_clip, remove_clip, set_effect, split_clip, add_marker, remove_marker, add_caption, remove_caption, set_property, add_track, remove_track, mute_track, set_transition`,
       );
   }
 }
@@ -458,6 +509,20 @@ export function applyOperation(
 
     case "set_effect": {
       const { track, clip } = findClipTrack(timeline, operation.clipId);
+      if (operation.effect.type === "speed") {
+        // A speed effect changes the source rate, so the source has to be
+        // long enough to fill the clip's timeline duration at that rate.
+        // Without this the render is silently short and every later clip
+        // falls out of the frame.
+        const rate = operation.effect.to ?? operation.effect.from ?? 1;
+        const needed = Math.round(clip.durationMs * rate);
+        const available = clip.outMs - clip.inMs;
+        if (needed > available) {
+          throw new Error(
+            `set_effect: speed ${rate}x on clip "${clip.id}" needs ${needed}ms of source for its ${clip.durationMs}ms on the timeline, but the clip has only ${available}ms. Trim the clip to ${Math.floor(available / rate)}ms or slow it down.`,
+          );
+        }
+      }
       const rest = clip.effects.filter(
         (e) => e.type !== operation.effect.type,
       );
@@ -595,6 +660,47 @@ export function applyOperation(
           t.id === operation.trackId ? { ...t, muted: operation.muted } : t,
         ),
       };
+    }
+
+    case "set_transition": {
+      const { track, clip } = findClipTrack(timeline, operation.clipId);
+      if (track.kind !== "video") {
+        throw new Error(
+          `set_transition: clip "${clip.id}" is on an ${track.kind} track, and only a video track can transition`,
+        );
+      }
+      if (operation.durationMs >= clip.durationMs) {
+        throw new Error(
+          `set_transition: duration ${operation.durationMs}ms is not shorter than clip "${clip.id}" (${clip.durationMs}ms)`,
+        );
+      }
+      // The transition belongs to the incoming clip, and only renders when
+      // the clip is exactly adjacent to the one before it.
+      const index = track.clips.findIndex((c) => c.id === clip.id);
+      const previous = track.clips[index - 1];
+      if (previous === undefined) {
+        throw new Error(
+          `set_transition: clip "${clip.id}" is the first on its track, so it has no clip to transition from`,
+        );
+      }
+      if (previous.startMs + previous.durationMs !== clip.startMs) {
+        throw new Error(
+          `set_transition: clip "${clip.id}" is not adjacent to "${previous.id}", so a transition between them would not render`,
+        );
+      }
+      return updateTrack(timeline, track.id, (clips) =>
+        clips.map((c) =>
+          c.id === clip.id
+            ? {
+                ...c,
+                transition: {
+                  name: operation.name,
+                  durationMs: operation.durationMs,
+                },
+              }
+            : c,
+        ),
+      );
     }
   }
 }

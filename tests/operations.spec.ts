@@ -168,12 +168,67 @@ test("set_effect adds then replaces by type", () => {
     type: "set_effect", clipId: "clip-1", effect: { type: "opacity", amount: 0.9 },
   }));
   tl = applyOperation(tl, validateOperation({
-    type: "set_effect", clipId: "clip-1", effect: { type: "volume", amount: 1.2 },
+    type: "set_effect", clipId: "clip-1", effect: { type: "volume", amount: 0.8 },
   }));
   assert.deepEqual(tl.tracks[0].clips[0].effects, [
     { type: "opacity", amount: 0.9, x: undefined, y: undefined, from: undefined, to: undefined },
-    { type: "volume", amount: 1.2, x: undefined, y: undefined, from: undefined, to: undefined },
+    { type: "volume", amount: 0.8, x: undefined, y: undefined, from: undefined, to: undefined },
   ]);
+});
+
+test("effect values outside their documented range are rejected", () => {
+  let tl = baseTimeline();
+  tl = addClip(tl, 0);
+  const bad = [
+    { type: "opacity", amount: 1.5 },
+    { type: "volume", amount: -0.1 },
+    { type: "scale", amount: 3 },
+    { type: "position", x: 2 },
+    { type: "position", y: -2 },
+    { type: "crop", from: 0.5, to: 1.5 },
+    { type: "speed", to: 0 },
+    { type: "speed", to: -1 },
+  ];
+  for (const effect of bad) {
+    assert.throws(
+      () =>
+        applyOperation(
+          tl,
+          validateOperation({ type: "set_effect", clipId: "clip-1", effect }),
+        ),
+      /invalid operation/,
+      `expected ${JSON.stringify(effect)} to be rejected`,
+    );
+  }
+});
+
+test("a speed effect needs enough source to fill the clip's timeline duration", () => {
+  let tl = baseTimeline();
+  tl = addClip(tl, 0);
+  // The clip is 2000ms on the timeline with 2000ms of source. At 2x it needs
+  // 4000ms of source, which it does not have.
+  assert.throws(
+    () =>
+      applyOperation(
+        tl,
+        validateOperation({
+          type: "set_effect",
+          clipId: "clip-1",
+          effect: { type: "speed", to: 2 },
+        }),
+      ),
+    /needs 4000ms of source/,
+  );
+  // At 0.5x it needs half, which it has.
+  const slowed = applyOperation(
+    tl,
+    validateOperation({
+      type: "set_effect",
+      clipId: "clip-1",
+      effect: { type: "speed", to: 0.5 },
+    }),
+  );
+  assert.equal(slowed.tracks[0].clips[0].effects[0].type, "speed");
 });
 
 test("split_clip cuts proportionally in timeline and source time", () => {

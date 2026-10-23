@@ -99,9 +99,15 @@ export async function renderTimeline(
         } else if (aborted) {
           reject(new Error("render aborted"));
         } else {
+          const detail = tail(stderr);
+          // A stock Homebrew ffmpeg ships without libass, so a caption render
+          // dies as a bare exit 8. Name the cause and the fix instead.
+          const missing = /No such filter: '([^']+)'/.exec(detail)?.[1];
           reject(
             new Error(
-              `ffmpeg exited with code ${code ?? -1}:\n${tail(stderr)}`,
+              missing === undefined
+                ? `ffmpeg exited with code ${code ?? -1}:\n${detail}`
+                : `ffmpeg exited with code ${code ?? -1}: "${ffmpegPath}" has no "${missing}" filter, so it cannot burn captions or draw text. Set ffmpegPath to a build with libass (brew install ffmpeg-full).\n${detail}`,
             ),
           );
         }

@@ -136,6 +136,14 @@ async function render(
     timeoutMs: FFMPEG_TIMEOUT_MS,
   });
   if (run.exitCode !== 0) {
+    // The mod cannot read the environment, so a stock Homebrew ffmpeg (no
+    // libass) fails a caption render as a bare exit 8. Name the cause.
+    const missing = /No such filter: '([^']+)'/.exec(run.stderr)?.[1];
+    if (missing !== undefined) {
+      return "render FAILED: the ffmpeg on PATH has no \"" + missing +
+        "\" filter, so it cannot burn captions or draw text. Put a build with libass first on PATH (brew install ffmpeg-full).\n" +
+        run.stderr.slice(-400);
+    }
     return "render FAILED (ffmpeg exit " + run.exitCode + "): " +
       run.stderr.slice(-400);
   }

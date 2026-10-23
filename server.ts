@@ -338,10 +338,13 @@ export default async function plugin(bb: BbPluginApi) {
       return startRender(scope, timeline, outputPath);
     },
     render_status: async ({ scope }) => {
+      // A live render outranks a newer finished one: reporting "done" while
+      // ffmpeg still writes would hide a running render behind a stale row.
       const row = db
         .prepare(
           `SELECT state, output_path, message FROM renders
-           WHERE thread_id = ? ORDER BY rowid DESC LIMIT 1`,
+           WHERE thread_id = ?
+           ORDER BY (state = 'rendering') DESC, rowid DESC LIMIT 1`,
         )
         .get(scope) as
         | { state: string; output_path: string; message: string }

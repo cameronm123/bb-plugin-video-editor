@@ -83,8 +83,11 @@ Each operation is an object with a `type` field. Pass them as a list to
 `set_effect` takes one of these `type` values:
 
 - `opacity` — `amount` 0 to 1. The clip fades toward black.
-- `scale` — `amount`. 1 is native size, 0.5 is half size, 2 is double. The
-  smaller picture sits centred in the frame.
+- `scale` — `amount`, 0 to 2. 1 is no change, 0.5 is half, 2 is double. What
+  it halves depends on the track. On the base track the clip is fitted to the
+  canvas first, so `amount` is a fraction of the frame and a smaller picture
+  sits centred with black around it. On an overlay track it multiplies the
+  source's own pixel size, with no fit to the frame first.
 - `position` — `x` and `y`, each -1 to 1. 0 is centred, 1 moves the picture
   half a frame right (or down), -1 half a frame left (or up).
 - `crop` — `from` and `to`, each 0 to 1. Keeps the part of the source

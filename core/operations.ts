@@ -392,6 +392,24 @@ function nextClipId(timeline: Timeline): ClipId {
   const used = timeline.tracks.flatMap((t) => t.clips.map((c) => c.id));
   return nextId(used, "clip");
 }
+
+/**
+ * A caller-supplied id has to be free, or a later op addressed by that id hits
+ * two objects: remove_clip("c1") would delete both clips sharing it.
+ */
+function assertIdFree(
+  existing: Iterable<string>,
+  id: string,
+  operation: string,
+): void {
+  for (const used of existing) {
+    if (used === id) {
+      throw new Error(
+        `${operation}: id "${id}" is already in use in this timeline`,
+      );
+    }
+  }
+}
 function findTrack(timeline: Timeline, trackId: string): Track {
   const track = timeline.tracks.find((t) => t.id === trackId);
   if (track === undefined) throw new Error(`no track with id "${trackId}"`);
@@ -447,6 +465,13 @@ export function applyOperation(
   switch (operation.type) {
     case "add_clip": {
       const track = findTrack(timeline, operation.trackId);
+      if (operation.id !== undefined) {
+        assertIdFree(
+          timeline.tracks.flatMap((t) => t.clips.map((c) => c.id)),
+          operation.id,
+          "add_clip",
+        );
+      }
       const clip: Clip = {
         id: operation.id ?? nextClipId(timeline),
         media: operation.media,
@@ -457,6 +482,18 @@ export function applyOperation(
         label: operation.label,
         effects: [],
       };
+      if (clip.outMs <= clip.inMs) {
+        throw new Error("add_clip: outMs must be greater than inMs");
+      }
+      // A clip longer than the source it trims to renders short and silently
+      // pushes every later clip out of the frame; set_effect guards the same
+      // rule for speed.
+      const available = clip.outMs - clip.inMs;
+      if (clip.durationMs > available) {
+        throw new Error(
+          `add_clip: durationMs ${clip.durationMs} is longer than the source range [${clip.inMs}..${clip.outMs}] (${available}ms), so the render would be short. Raise outMs or lower durationMs.`,
+        );
+      }
       assertNoOverlap([...track.clips, clip], "add_clip");
       return updateTrack(timeline, operation.trackId, (clips) =>
         sortedByStart([...clips, clip]),
@@ -486,6 +523,13 @@ export function applyOperation(
       const { track, clip } = findClipTrack(timeline, operation.clipId);
       const targetId = operation.trackId ?? track.id;
       const target = findTrack(timeline, targetId);
+      // A video clip on an audio track compiles to [N:a] against a video-only
+      // source, which ffmpeg rejects at render time with "matches no streams".
+      if (target.kind !== track.kind) {
+        throw new Error(
+          `move_clip: clip "${clip.id}" is on an ${track.kind} track and cannot move to ${target.kind} track "${target.id}"`,
+        );
+      }
       const moved: Clip = { ...clip, startMs: operation.startMs };
       if (moved.startMs === clip.startMs && targetId === track.id) {
         return timeline;
@@ -582,6 +626,13 @@ export function applyOperation(
     }
 
     case "add_marker": {
+      if (operation.id !== undefined) {
+        assertIdFree(
+          timeline.markers.map((m) => m.id),
+          operation.id,
+          "add_marker",
+        );
+      }
       const marker: Marker = {
         id: operation.id ?? nextId(timeline.markers.map((m) => m.id), "marker"),
         atMs: operation.atMs,
@@ -607,6 +658,13 @@ export function applyOperation(
     case "add_caption": {
       if (operation.endMs <= operation.atMs) {
         throw new Error("add_caption: endMs must be greater than atMs");
+      }
+      if (operation.id !== undefined) {
+        assertIdFree(
+          timeline.captions.map((c) => c.id),
+          operation.id,
+          "add_caption",
+        );
       }
       const caption: Caption = {
         id: operation.id ?? nextId(timeline.captions.map((c) => c.id), "caption"),
@@ -645,6 +703,13 @@ export function applyOperation(
     }
 
     case "add_track": {
+      if (operation.id !== undefined) {
+        assertIdFree(
+          timeline.tracks.map((t) => t.id),
+          operation.id,
+          "add_track",
+        );
+      }
       const track: Track = {
         id: operation.id ?? nextId(timeline.tracks.map((t) => t.id), "track"),
         kind: operation.kind,

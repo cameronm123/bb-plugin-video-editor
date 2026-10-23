@@ -104,6 +104,35 @@ test("add_clip throws on unknown track and on overlap", () => {
   addClip(tl, 1000, 1000);
 });
 
+test("add_clip rejects an empty source range", () => {
+  const tl = baseTimeline();
+  assert.throws(() => applyOperation(tl, validateOperation({
+    type: "add_clip", trackId: "v1", media, startMs: 0, durationMs: 1, inMs: 5000, outMs: 1,
+  })), /outMs must be greater than inMs/);
+});
+
+test("add_clip rejects a clip longer than its source range", () => {
+  const tl = baseTimeline();
+  assert.throws(() => applyOperation(tl, validateOperation({
+    type: "add_clip", trackId: "v1", media, startMs: 0, durationMs: 5000, inMs: 0, outMs: 1000,
+  })), /longer than the source range/);
+});
+
+test("a duplicate id is rejected, so remove hits one object", () => {
+  let tl = baseTimeline();
+  tl = addClip(tl, 0, 1000);
+  assert.throws(() => applyOperation(tl, validateOperation({
+    type: "add_clip", trackId: "v1", media, startMs: 1000, durationMs: 1000, inMs: 0, outMs: 1000, id: "clip-1",
+  })), /already in use/);
+  assert.throws(() => applyOperation(tl, validateOperation({
+    type: "add_track", kind: "video", id: "v1",
+  })), /already in use/);
+  const marked = applyOperation(tl, validateOperation({ type: "add_marker", atMs: 0, name: "m", id: "m1" }));
+  assert.throws(() => applyOperation(marked, validateOperation({
+    type: "add_marker", atMs: 1, name: "m2", id: "m1",
+  })), /already in use/);
+});
+
 test("trim_clip changes duration and throws on bad ranges", () => {
   let tl = baseTimeline();
   tl = addClip(tl, 0, 2000);
@@ -130,6 +159,7 @@ test("trim_clip that overlaps the neighbour throws", () => {
 
 test("move_clip repositions and can change track", () => {
   let tl = baseTimeline();
+  tl = applyOperation(tl, validateOperation({ type: "add_track", kind: "video", id: "v2" }));
   tl = addClip(tl, 0, 1000);
   tl = addClip(tl, 1000, 1000);
   tl = applyOperation(tl, validateOperation({
@@ -140,13 +170,21 @@ test("move_clip repositions and can change track", () => {
     [["clip-2", 1000], ["clip-1", 2000]],
   );
   tl = applyOperation(tl, validateOperation({
-    type: "move_clip", clipId: "clip-1", startMs: 0, trackId: "a1",
+    type: "move_clip", clipId: "clip-1", startMs: 0, trackId: "v2",
   }));
   assert.equal(tl.tracks[0].clips.length, 1);
-  assert.equal(tl.tracks[1].clips[0].id, "clip-1");
+  assert.equal(tl.tracks[2].clips[0].id, "clip-1");
   assert.throws(() => applyOperation(tl, validateOperation({
     type: "move_clip", clipId: "clip-1", startMs: 1000, trackId: "v1",
   })), /overlap/);
+});
+
+test("move_clip rejects a cross-kind move", () => {
+  let tl = baseTimeline();
+  tl = addClip(tl, 0, 1000);
+  assert.throws(() => applyOperation(tl, validateOperation({
+    type: "move_clip", clipId: "clip-1", startMs: 0, trackId: "a1",
+  })), /cannot move to audio track/);
 });
 
 test("remove_clip removes only that clip", () => {

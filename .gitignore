@@ -1,2 +1,7 @@
 dist/
 node_modules/
+.DS_Store
+.claude/
+.codex/
+.entire/
+.pi/
